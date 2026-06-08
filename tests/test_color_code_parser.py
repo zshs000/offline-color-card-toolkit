@@ -45,6 +45,21 @@ def test_horizontal_parser_splits_merged_two_digit_numeric_run() -> None:
     assert parsed.codes == ["10", "11", "12", "13", "14", "15", "16", "17"]
 
 
+def test_horizontal_parser_does_not_split_two_digit_codes_into_single_digits() -> None:
+    blocks = [block(str(number), 20 + index * 45, 250) for index, number in enumerate(range(1, 10))]
+    blocks.extend(
+        [
+            block("10111213141516", 430, 250, 300, 12),
+            block("17181920212223", 750, 250, 300, 12),
+            block("242526272829", 1070, 250, 260, 12),
+        ]
+    )
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.codes == [str(number) for number in range(1, 30)]
+
+
 def test_vertical_codes_are_sorted_left_column_then_right_column() -> None:
     blocks = [block(str(number), 80, 20 + index * 30) for index, number in enumerate(range(47, 70))]
     blocks.extend(block(str(number), 880, 20 + index * 30) for index, number in enumerate(range(70, 93)))

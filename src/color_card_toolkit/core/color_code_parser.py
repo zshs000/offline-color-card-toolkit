@@ -122,20 +122,59 @@ def _is_candidate_code(text: str) -> bool:
 
 
 def _expand_merged_numeric_runs(codes: list[str]) -> list[str]:
-    short_numeric_widths = [len(code) for code in codes if code.isdigit() and 1 <= len(code) <= 3]
-    if not short_numeric_widths:
-        return codes
-    width = int(median(short_numeric_widths))
-    if width <= 0:
-        return codes
+    fallback_width = _fallback_expansion_width(codes)
 
     expanded: list[str] = []
     for code in codes:
-        if code.isdigit() and len(code) > width and len(code) % width == 0:
-            expanded.extend(code[index : index + width] for index in range(0, len(code), width))
+        sequential_parts = _split_by_expected_sequence(code, expanded)
+        if sequential_parts:
+            expanded.extend(sequential_parts)
+        elif fallback_width >= 2 and code.isdigit() and len(code) > fallback_width and len(code) % fallback_width == 0:
+            expanded.extend(code[index : index + fallback_width] for index in range(0, len(code), fallback_width))
         else:
             expanded.append(code)
     return expanded
+
+
+def _fallback_expansion_width(codes: list[str]) -> int:
+    numeric_widths = [len(code) for code in codes if code.isdigit() and 1 <= len(code) <= 3]
+    if not numeric_widths:
+        return 0
+    multi_digit_widths = [width for width in numeric_widths if width >= 2]
+    if multi_digit_widths:
+        return int(median(multi_digit_widths))
+    return int(median(numeric_widths))
+
+
+def _split_by_expected_sequence(code: str, previous_codes: list[str]) -> list[str]:
+    if not code.isdigit():
+        return []
+
+    previous_code = next((item for item in reversed(previous_codes) if item.isdigit()), "")
+    if not previous_code:
+        return []
+
+    previous_number = int(previous_code)
+    expected_number = previous_number + 1
+    expected_width = len(previous_code) if previous_code.startswith("0") else 0
+    first_expected_text = _format_expected_number(expected_number, expected_width)
+    if len(code) < max(3, len(first_expected_text) * 2):
+        return []
+
+    remaining = code
+    parts: list[str] = []
+    while remaining:
+        expected_text = _format_expected_number(expected_number, expected_width)
+        if not remaining.startswith(expected_text):
+            return []
+        parts.append(expected_text)
+        remaining = remaining[len(expected_text) :]
+        expected_number += 1
+    return parts
+
+
+def _format_expected_number(number: int, width: int) -> str:
+    return str(number).zfill(width) if width else str(number)
 
 
 def _cluster_blocks(blocks: list[OcrBlock], axis: str) -> list[_Cluster]:
