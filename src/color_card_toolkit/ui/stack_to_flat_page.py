@@ -187,6 +187,12 @@ class StackToFlatPage(QWidget):
             self._set_item(row, 6, result.display_missing_codes, editable=False)
             self._set_item(row, 7, "；".join(result.warnings), editable=False)
 
+    def _clear_recognition_state(self) -> None:
+        self._image_paths = []
+        self._results = []
+        self.table.setRowCount(0)
+        self.image_summary.setText("未选择图片")
+
     def _set_item(self, row: int, column: int, text: str, *, editable: bool = True) -> None:
         item = QTableWidgetItem(text)
         if not editable:
@@ -271,4 +277,5 @@ class StackToFlatPage(QWidget):
             QMessageBox.critical(self, "生成失败", str(exc))
             return
 
+        self._clear_recognition_state()
         QMessageBox.information(self, "生成完成", f"Word 已生成：\n{generated}")
