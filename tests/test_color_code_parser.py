@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+from color_card_toolkit.core.color_code_parser import find_missing_numeric_codes, parse_color_codes
+from color_card_toolkit.core.models import OcrBlock
+
+
+def block(text: str, x: float, y: float, w: float = 20, h: float = 12) -> OcrBlock:
+    return OcrBlock(
+        text=text,
+        confidence=0.98,
+        box=((x, y), (x + w, y), (x + w, y + h), (x, y + h)),
+    )
+
+
+def test_horizontal_codes_are_sorted_left_to_right_and_noise_is_filtered() -> None:
+    blocks = [
+        block("2014", 1200, 60, 80, 30),
+        block('Width:52" Thickness:0.9mm', 1200, 130, 220, 20),
+        block("01", 10, 250),
+        block("02", 110, 252),
+        block("03", 210, 249),
+        block("04", 310, 250),
+        block("05", 410, 251),
+        block("06", 510, 250),
+        block("08", 610, 250),
+    ]
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.orientation == "horizontal"
+    assert parsed.codes == ["01", "02", "03", "04", "05", "06", "08"]
+    assert parsed.missing_codes == ["07"]
+
+
+def test_vertical_codes_are_sorted_left_column_then_right_column() -> None:
+    blocks = [block(str(number), 80, 20 + index * 30) for index, number in enumerate(range(47, 70))]
+    blocks.extend(block(str(number), 880, 20 + index * 30) for index, number in enumerate(range(70, 93)))
+    blocks.extend(
+        [
+            block("Q弹雅镜", 720, 80, 120, 28),
+            block("货号", 690, 20, 60, 20),
+        ]
+    )
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.orientation == "vertical"
+    assert parsed.codes[:3] == ["47", "48", "49"]
+    assert parsed.codes[22:25] == ["69", "70", "71"]
+    assert parsed.codes[-1] == "92"
+
+
+def test_missing_numeric_codes_preserve_width() -> None:
+    assert find_missing_numeric_codes(["01", "02", "04"]) == ["03"]
+
