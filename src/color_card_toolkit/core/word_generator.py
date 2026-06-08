@@ -86,19 +86,18 @@ def _fill_table(table: Table, header: str, codes: list[str]) -> None:
         for column_index in range(6):
             cell = table.cell(row_index, column_index)
             cell.text = ""
-            _align_cell(cell)
+            _align_cell(cell, alignment=WD_ALIGN_PARAGRAPH.LEFT)
 
     for index, code in enumerate(codes[:PAGE_SIZE]):
         row_index = CODE_ROW_INDICES[index // 6]
         column_index = index % 6
         cell = table.cell(row_index, column_index)
         cell.text = str(code)
-        _align_cell(cell)
+        _align_cell(cell, alignment=WD_ALIGN_PARAGRAPH.LEFT)
 
 
-def _align_cell(cell, *, bold: bool = False) -> None:
+def _align_cell(cell, *, bold: bool = False, alignment=WD_ALIGN_PARAGRAPH.CENTER) -> None:
     for paragraph in cell.paragraphs:
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        paragraph.alignment = alignment
         for run in paragraph.runs:
             run.bold = bold
-
