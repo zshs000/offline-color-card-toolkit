@@ -2,10 +2,11 @@
 
 from pathlib import Path
 
-ROOT = Path.cwd()
+SPEC_LOCATION = Path(SPECPATH).resolve()
+ROOT = SPEC_LOCATION.parent.parent if SPEC_LOCATION.suffix == ".spec" else SPEC_LOCATION.parent
 
 a = Analysis(
-    ["src/color_card_toolkit/main.py"],
+    [str(ROOT / "src/color_card_toolkit/main.py")],
     pathex=[str(ROOT / "src")],
     binaries=[],
     datas=[
@@ -50,4 +51,3 @@ coll = COLLECT(
     upx_exclude=[],
     name="线下色卡采集工具集",
 )
-
