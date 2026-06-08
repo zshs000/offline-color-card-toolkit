@@ -37,8 +37,10 @@ def generate_flat_template_docx(
     _keep_only_first_table(document)
     _ensure_table_count(document, template_table_xml, len(pages))
 
-    for table, (header, codes) in zip(document.tables, pages):
+    for index, (table, (header, codes)) in enumerate(zip(document.tables, pages)):
         _fill_table(table, header, codes)
+        if index > 0:
+            _set_table_page_break_before(table)
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -57,7 +59,6 @@ def _build_pages(groups: list[GroupedColorCard]) -> list[tuple[str, list[str]]]:
 def _ensure_table_count(document, template_table_xml, count: int) -> None:
     body = document._body._element
     for _ in range(count - len(document.tables)):
-        _insert_before_section_properties(body, _page_break_paragraph())
         _insert_before_section_properties(body, deepcopy(template_table_xml))
 
 
@@ -79,16 +80,6 @@ def _insert_before_section_properties(body, element) -> None:
         body.append(element)
     else:
         section_properties.addprevious(element)
-
-
-def _page_break_paragraph():
-    paragraph = OxmlElement("w:p")
-    run = OxmlElement("w:r")
-    break_element = OxmlElement("w:br")
-    break_element.set(qn("w:type"), "page")
-    run.append(break_element)
-    paragraph.append(run)
-    return paragraph
 
 
 def _fill_table(table: Table, header: str, codes: list[str]) -> None:
@@ -114,3 +105,10 @@ def _align_cell(cell, *, bold: bool = False, alignment=WD_ALIGN_PARAGRAPH.CENTER
         paragraph.alignment = alignment
         for run in paragraph.runs:
             run.bold = bold
+
+
+def _set_table_page_break_before(table: Table) -> None:
+    paragraph = table.cell(0, 0).paragraphs[0]
+    paragraph_properties = paragraph._p.get_or_add_pPr()
+    if paragraph_properties.find(qn("w:pageBreakBefore")) is None:
+        paragraph_properties.append(OxmlElement("w:pageBreakBefore"))
