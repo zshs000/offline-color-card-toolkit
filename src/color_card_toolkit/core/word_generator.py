@@ -34,6 +34,7 @@ def generate_flat_template_docx(
         raise ValueError("模板中未找到表格")
 
     template_table_xml = deepcopy(document.tables[0]._tbl)
+    _keep_only_first_table(document)
     _ensure_table_count(document, template_table_xml, len(pages))
 
     for table, (header, codes) in zip(document.tables, pages):
@@ -58,6 +59,18 @@ def _ensure_table_count(document, template_table_xml, count: int) -> None:
     for _ in range(count - len(document.tables)):
         _insert_before_section_properties(body, _page_break_paragraph())
         _insert_before_section_properties(body, deepcopy(template_table_xml))
+
+
+def _keep_only_first_table(document) -> None:
+    body = document._body._element
+    kept_table = False
+    for child in list(body):
+        if child.tag == qn("w:sectPr"):
+            continue
+        if child.tag == qn("w:tbl") and not kept_table:
+            kept_table = True
+            continue
+        body.remove(child)
 
 
 def _insert_before_section_properties(body, element) -> None:
