@@ -19,3 +19,4 @@ dist/
 .env
 .DS_Store
 Thumbs.db
+tests/测试图片/

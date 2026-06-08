@@ -32,6 +32,19 @@ def test_horizontal_codes_are_sorted_left_to_right_and_noise_is_filtered() -> No
     assert parsed.missing_codes == ["07"]
 
 
+def test_horizontal_parser_splits_merged_two_digit_numeric_run() -> None:
+    blocks = [
+        block("2014", 1200, 60, 80, 30),
+        block("10", 810, 250),
+        block("11", 910, 250),
+        block("121314151617", 1030, 250, 588, 39),
+    ]
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.codes == ["10", "11", "12", "13", "14", "15", "16", "17"]
+
+
 def test_vertical_codes_are_sorted_left_column_then_right_column() -> None:
     blocks = [block(str(number), 80, 20 + index * 30) for index, number in enumerate(range(47, 70))]
     blocks.extend(block(str(number), 880, 20 + index * 30) for index, number in enumerate(range(70, 93)))
@@ -52,4 +65,3 @@ def test_vertical_codes_are_sorted_left_column_then_right_column() -> None:
 
 def test_missing_numeric_codes_preserve_width() -> None:
     assert find_missing_numeric_codes(["01", "02", "04"]) == ["03"]
-

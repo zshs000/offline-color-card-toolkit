@@ -77,7 +77,8 @@ def parse_color_codes(blocks: list[OcrBlock]) -> ParsedColorCodes:
         ordered = sorted(candidates, key=lambda block: (block.center_y, block.center_x))
         orientation = "unknown"
 
-    codes = _drop_outlier_codes([normalize_text(block.text) for block in ordered])
+    codes = _expand_merged_numeric_runs([normalize_text(block.text) for block in ordered])
+    codes = _drop_outlier_codes(codes)
     missing = find_missing_numeric_codes(codes)
     warnings: list[str] = []
     if missing:
@@ -113,11 +114,28 @@ def _is_candidate_code(text: str) -> bool:
         return False
     if re.search(r"\b\d+(?:\.\d+)?\s*(mm|cm|inch|in)\b", lowered):
         return False
-    if re.fullmatch(r"\d{4,}", normalized):
-        return False
+    if normalized.isdigit():
+        return len(normalized) <= 24
     if len(normalized) > 8:
         return False
     return bool(re.search(r"[\w\u4e00-\u9fff]", normalized))
+
+
+def _expand_merged_numeric_runs(codes: list[str]) -> list[str]:
+    short_numeric_widths = [len(code) for code in codes if code.isdigit() and 1 <= len(code) <= 3]
+    if not short_numeric_widths:
+        return codes
+    width = int(median(short_numeric_widths))
+    if width <= 0:
+        return codes
+
+    expanded: list[str] = []
+    for code in codes:
+        if code.isdigit() and len(code) > width and len(code) % width == 0:
+            expanded.extend(code[index : index + width] for index in range(0, len(code), width))
+        else:
+            expanded.append(code)
+    return expanded
 
 
 def _cluster_blocks(blocks: list[OcrBlock], axis: str) -> list[_Cluster]:
@@ -177,4 +195,3 @@ def _drop_outlier_codes(codes: list[str]) -> list[str]:
         if common_width <= 2:
             return [code for code in codes if not (code.isdigit() and len(code) > 2)]
     return codes
-
