@@ -1,9 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_data_files
 
 SPEC_LOCATION = Path(SPECPATH).resolve()
 ROOT = SPEC_LOCATION.parent.parent if SPEC_LOCATION.suffix == ".spec" else SPEC_LOCATION.parent
+rapidocr_datas = collect_data_files("rapidocr_onnxruntime")
 
 a = Analysis(
     [str(ROOT / "src/color_card_toolkit/main.py")],
@@ -14,8 +16,9 @@ a = Analysis(
             str(ROOT / "src/color_card_toolkit/resources/templates/转平贴底纸模板.docx"),
             "resources/templates",
         ),
-    ],
-    hiddenimports=[],
+    ]
+    + rapidocr_datas,
+    hiddenimports=["rapidocr_onnxruntime"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
