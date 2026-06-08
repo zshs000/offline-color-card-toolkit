@@ -9,6 +9,8 @@ from color_card_toolkit.core.grouping import parse_group_name
 from color_card_toolkit.core.models import ImageRecognitionResult, OcrBlock
 from color_card_toolkit.core.ocr_engine import OcrEngine
 
+GROUP_NAME_TOP_BAND_RATIO = 0.14
+
 
 def recognize_image(image_path: str | Path, ocr_engine: OcrEngine) -> ImageRecognitionResult:
     path = Path(image_path)
@@ -35,19 +37,31 @@ def recognize_image(image_path: str | Path, ocr_engine: OcrEngine) -> ImageRecog
 
 def extract_group_name(image_path: Path, blocks: list[OcrBlock]) -> str:
     width, height = _image_size(image_path, blocks)
-    left_top_blocks = [
+    candidates = [
         block
         for block in blocks
         if block.center_x <= width * 0.35 and block.center_y <= height * 0.22
     ]
-    left_top_blocks = [
+    candidates = [
         block
-        for block in left_top_blocks
+        for block in candidates
         if len(block.text.strip()) <= 24 and not block.text.strip().isdigit()
     ]
-    if not left_top_blocks:
+    if not candidates:
         return ""
-    ordered = sorted(left_top_blocks, key=lambda block: (block.center_y, block.center_x))
+
+    top_center_y = min(block.center_y for block in candidates)
+    if top_center_y > height * GROUP_NAME_TOP_BAND_RATIO:
+        return ""
+
+    min_text_height = min(max(block.height, 1.0) for block in candidates)
+    row_tolerance = max(8.0, height * 0.01, min_text_height * 1.2)
+    top_line_blocks = [
+        block
+        for block in candidates
+        if block.center_y <= top_center_y + row_tolerance
+    ]
+    ordered = sorted(top_line_blocks, key=lambda block: (block.center_y, block.center_x))
     return " ".join(block.text.strip() for block in ordered if block.text.strip()).strip()
 
 
@@ -62,4 +76,3 @@ def _image_size(image_path: Path, blocks: list[OcrBlock]) -> tuple[float, float]
             max(block.max_x for block in blocks) or 1.0,
             max(block.max_y for block in blocks) or 1.0,
         )
-
