@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Qt
+from PySide6.QtCore import QStandardPaths, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -69,7 +68,7 @@ class StackToFlatPage(QWidget):
         output_box = QGroupBox("输出设置")
         output_layout = QGridLayout(output_box)
         self.output_name_edit = QLineEdit("转平贴结果.docx")
-        self.output_folder_edit = QLineEdit(str(Path.cwd()))
+        self.output_folder_edit = QLineEdit(str(self._default_output_folder()))
         browse_output = QPushButton("选择目录")
         browse_output.clicked.connect(self._pick_output_folder)
         output_layout.addWidget(QLabel("Word 名称："), 0, 0)
@@ -116,6 +115,11 @@ class StackToFlatPage(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "选择保存目录", self.output_folder_edit.text())
         if folder:
             self.output_folder_edit.setText(folder)
+
+    def _default_output_folder(self) -> Path:
+        documents = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+        base_folder = Path(documents) if documents else Path.home() / "Documents"
+        return base_folder / "线下色卡采集工具集输出"
 
     def _pick_images(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
@@ -260,7 +264,8 @@ class StackToFlatPage(QWidget):
         output_name = self.output_name_edit.text().strip() or "转平贴结果.docx"
         if not output_name.lower().endswith(".docx"):
             output_name += ".docx"
-        output_folder = Path(self.output_folder_edit.text().strip() or os.getcwd())
+        output_folder_text = self.output_folder_edit.text().strip()
+        output_folder = Path(output_folder_text) if output_folder_text else self._default_output_folder()
         output_path = output_folder / output_name
 
         grouping_result = group_recognition_results(self._results_from_table())

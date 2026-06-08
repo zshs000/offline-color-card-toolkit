@@ -50,3 +50,10 @@ def test_generate_word_clears_recognition_state(monkeypatch, tmp_path: Path) -> 
     assert page.image_summary.text() == "未选择图片"
     assert page.output_folder_edit.text() == str(tmp_path)
     assert page.output_name_edit.text() == "result.docx"
+
+
+def test_output_folder_defaults_to_user_output_directory() -> None:
+    _app()
+    page = StackToFlatPage(on_back=lambda: None)
+
+    assert Path(page.output_folder_edit.text()).name == "线下色卡采集工具集输出"
