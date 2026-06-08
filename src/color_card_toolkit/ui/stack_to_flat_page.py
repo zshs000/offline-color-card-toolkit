@@ -131,14 +131,45 @@ class StackToFlatPage(QWidget):
         if not self._image_paths:
             QMessageBox.information(self, "未选择图片", "请先选择 .jpg/.jpeg/.png 图片。")
             return
+        self._results = []
         try:
             if self._ocr_engine is None:
                 self._ocr_engine = RapidOcrEngine()
-            self._results = [recognize_image(path, self._ocr_engine) for path in self._image_paths]
         except Exception as exc:
-            QMessageBox.warning(self, "识别失败", str(exc))
+            self._results = [
+                self._manual_result_for_image(path, f"OCR 初始化失败：{exc}。已使用文件名作为组名，请手动修正。")
+                for path in self._image_paths
+            ]
+            self._populate_table(self._results)
+            QMessageBox.warning(self, "OCR 初始化失败", "已为所有图片生成可编辑行，请手动填写组名、序号和色号。")
             return
+
+        failed_count = 0
+        for path in self._image_paths:
+            try:
+                self._results.append(recognize_image(path, self._ocr_engine))
+            except Exception as exc:
+                failed_count += 1
+                self._results.append(
+                    self._manual_result_for_image(path, f"OCR 识别失败：{exc}。已使用文件名作为组名，请手动修正。")
+                )
         self._populate_table(self._results)
+        if failed_count:
+            QMessageBox.warning(self, "部分图片识别失败", f"{failed_count} 张图片识别失败，已生成可编辑行供手动修正。")
+
+    def _manual_result_for_image(self, path: Path, warning: str) -> ImageRecognitionResult:
+        fallback_name = path.stem.strip()
+        parsed = parse_group_name(fallback_name)
+        return ImageRecognitionResult(
+            image_path=path,
+            raw_name=fallback_name,
+            base_name=parsed.base_name,
+            sequence=parsed.sequence,
+            color_codes=[],
+            explicit_sequence=parsed.explicit_sequence,
+            warnings=[warning],
+            confidence=0.0,
+        )
 
     def _populate_table(self, results: list[ImageRecognitionResult]) -> None:
         self.table.setRowCount(len(results))
