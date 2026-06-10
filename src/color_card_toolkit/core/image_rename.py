@@ -103,52 +103,31 @@ def crop_main_images(
         source = Path(image_path)
         warnings: list[str] = []
         blocks = ocr_engine.recognize(source)
-        name_block = _top_left_name_block(source, blocks)
         recognized_name = extract_top_left_name(source, blocks)
         if not recognized_name:
             recognized_name = _safe_filename(source.stem) or "未识别"
             warnings.append("左上角名称识别为空，已使用原文件名")
 
         output_path = unique_output_path(folder, recognized_name, source.suffix)
-        _crop_image(source, output_path, name_block, crop_size_cm)
+        _crop_image(source, output_path, crop_size_cm)
         results.append(ImageProcessResult(source, output_path, recognized_name, warnings))
 
     return results
 
 
-def _crop_image(source: Path, output_path: Path, anchor: OcrBlock | None, crop_size_cm: int) -> None:
+def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> None:
     with Image.open(source) as image:
         dpi_x, dpi_y = _image_dpi(image)
         crop_width = min(_cm_to_pixels(crop_size_cm, dpi_x), image.width)
         crop_height = min(_cm_to_pixels(crop_size_cm, dpi_y), image.height)
-        left = int(anchor.min_x) if anchor else 0
-        top = int(anchor.min_y) if anchor else 0
-        left = max(0, min(left, image.width - crop_width))
-        top = max(0, min(top, image.height - crop_height))
+        left = max(0, (image.width - crop_width) // 2)
+        top = max(0, (image.height - crop_height) // 2)
         cropped = image.crop((left, top, left + crop_width, top + crop_height))
 
         save_kwargs = {}
         if (image.format or "").upper() in {"JPEG", "JPG"}:
             save_kwargs = {"quality": 100, "subsampling": 0}
         cropped.save(output_path, format=image.format, **save_kwargs)
-
-
-def _top_left_name_block(image_path: Path, blocks: list[OcrBlock]) -> OcrBlock | None:
-    width, height = _image_size(image_path, blocks)
-    candidates = [
-        block
-        for block in blocks
-        if block.center_x <= width * 0.45
-        and block.center_y <= height * 0.25
-        and block.text.strip()
-        and len(block.text.strip()) <= 48
-    ]
-    if not candidates:
-        return None
-    top_center_y = min(block.center_y for block in candidates)
-    if top_center_y > height * 0.18:
-        return None
-    return min(candidates, key=lambda block: (block.center_y, block.center_x))
 
 
 def _image_size(image_path: Path, blocks: list[OcrBlock]) -> tuple[float, float]:

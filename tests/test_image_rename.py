@@ -67,3 +67,23 @@ def test_crop_main_images_uses_image_dpi_to_crop_requested_centimeters(tmp_path:
     with Image.open(results[0].output_path) as cropped:
         assert cropped.size == (1000, 1000)
         assert cropped.format == "JPEG"
+
+
+def test_crop_main_images_crops_from_image_center_not_ocr_text_position(tmp_path: Path) -> None:
+    image_path = tmp_path / "main.png"
+    image = Image.new("RGB", (1600, 1400), "white")
+    for x in range(100, 150):
+        for y in range(120, 170):
+            image.putpixel((x, y), (255, 0, 0))
+    for x in range(300, 350):
+        for y in range(200, 250):
+            image.putpixel((x, y), (0, 0, 255))
+    image.save(image_path, dpi=(254, 254))
+    output_dir = tmp_path / "cropped"
+    engine = FakeOcrEngine({str(image_path): [block("Main01", 100, 120)]})
+
+    results = crop_main_images([image_path], output_dir, engine, crop_size_cm=10)
+
+    with Image.open(results[0].output_path) as cropped:
+        assert cropped.size == (1000, 1000)
+        assert cropped.getpixel((0, 0)) == (0, 0, 255)
