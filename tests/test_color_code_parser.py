@@ -78,5 +78,30 @@ def test_vertical_codes_are_sorted_left_column_then_right_column() -> None:
     assert parsed.codes[-1] == "92"
 
 
+def test_vertical_parser_keeps_only_code_columns_with_alphanumeric_codes() -> None:
+    left_codes = ["1A"] + [str(number) for number in range(1, 26)]
+    right_codes = [str(number) for number in range(26, 48)] + ["A1", "A2", "A3"]
+    blocks = [block(code, 130, 210 + index * 30) for index, code in enumerate(left_codes)]
+    blocks.extend(block(code, 1160, 200 + index * 30) for index, code in enumerate(right_codes))
+    blocks.extend(
+        [
+            block("百香果", 115, 60, 120, 35),
+            block("百香果", 1010, 60, 120, 35),
+            block("货名", 900, 80, 50, 20),
+            block("规格", 900, 155, 50, 20),
+            block("专营各类:", 145, 1710, 160, 35),
+            block("鞋材", 365, 1710, 80, 35),
+            block("王袋", 560, 1710, 80, 35),
+            block("家具等PU", 765, 1710, 130, 35),
+            block("面料", 1010, 1710, 80, 35),
+        ]
+    )
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.orientation == "vertical"
+    assert parsed.codes == left_codes + right_codes
+
+
 def test_missing_numeric_codes_preserve_width() -> None:
     assert find_missing_numeric_codes(["01", "02", "04"]) == ["03"]

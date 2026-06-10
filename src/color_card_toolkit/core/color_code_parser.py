@@ -56,6 +56,8 @@ def parse_color_codes(blocks: list[OcrBlock]) -> ParsedColorCodes:
     if not candidates:
         return ParsedColorCodes(codes=[], orientation="unknown", warnings=["未识别到色号"])
 
+    vertical_candidates = [_clean_block(block) for block in blocks if _is_vertical_code_candidate(block.text)]
+    vertical_columns = _best_vertical_columns(vertical_candidates)
     rows = _cluster_blocks(candidates, "y")
     best_row = _best_cluster(rows)
     columns = [cluster for cluster in _cluster_blocks(candidates, "x") if len(cluster.blocks) >= 3]
@@ -64,7 +66,10 @@ def parse_color_codes(blocks: list[OcrBlock]) -> ParsedColorCodes:
     row_count = len(best_row.blocks) if best_row else 0
     column_count = sum(len(cluster.blocks) for cluster in best_columns)
 
-    if column_count >= 6 and column_count > row_count + 2:
+    if _should_use_vertical_columns(vertical_columns, row_count):
+        ordered = _ordered_vertical(vertical_columns)
+        orientation = "vertical"
+    elif column_count >= 6 and column_count > row_count + 2:
         ordered = _ordered_vertical(best_columns)
         orientation = "vertical"
     elif best_row and row_count >= 2:
@@ -119,6 +124,17 @@ def _is_candidate_code(text: str) -> bool:
     if len(normalized) > 8:
         return False
     return bool(re.search(r"[\w\u4e00-\u9fff]", normalized))
+
+
+def _is_vertical_code_candidate(text: str) -> bool:
+    normalized = normalize_text(text).upper()
+    if not normalized:
+        return False
+    if any(keyword in normalized.lower() for keyword in _NOISE_KEYWORDS):
+        return False
+    if re.search(r"[\u4e00-\u9fff]", normalized):
+        return False
+    return bool(re.fullmatch(r"(?:[A-Z]{0,2}\d{1,3}[A-Z]{0,2}|\d{1,3})", normalized))
 
 
 def _expand_merged_numeric_runs(codes: list[str]) -> list[str]:
@@ -204,6 +220,24 @@ def _cluster_blocks(blocks: list[OcrBlock], axis: str) -> list[_Cluster]:
         axis_value = sum(item.center_y if axis == "y" else item.center_x for item in cluster) / len(cluster)
         result.append(_Cluster(blocks=cluster, axis_value=axis_value))
     return result
+
+
+def _best_vertical_columns(blocks: list[OcrBlock]) -> list[_Cluster]:
+    columns = [
+        cluster
+        for cluster in _cluster_blocks(blocks, "x")
+        if len(cluster.blocks) >= 3 and _cluster_span(cluster.blocks, "y") >= 30
+    ]
+    return sorted(columns, key=lambda cluster: len(cluster.blocks), reverse=True)[:2]
+
+
+def _should_use_vertical_columns(columns: list[_Cluster], row_count: int) -> bool:
+    column_count = sum(len(cluster.blocks) for cluster in columns)
+    if column_count < 6:
+        return False
+    if len(columns) >= 2:
+        return True
+    return column_count > row_count + 2
 
 
 def _best_cluster(clusters: list[_Cluster]) -> _Cluster | None:
