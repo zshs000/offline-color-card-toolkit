@@ -6,18 +6,16 @@ from PyInstaller.utils.hooks import collect_data_files
 SPEC_LOCATION = Path(SPECPATH).resolve()
 ROOT = SPEC_LOCATION.parent.parent if SPEC_LOCATION.suffix == ".spec" else SPEC_LOCATION.parent
 rapidocr_datas = collect_data_files("rapidocr_onnxruntime")
+template_datas = [
+    (str(path), "resources/templates")
+    for path in (ROOT / "src/color_card_toolkit/resources/templates").glob("*.docx")
+]
 
 a = Analysis(
     [str(ROOT / "src/color_card_toolkit/main.py")],
     pathex=[str(ROOT / "src")],
     binaries=[],
-    datas=[
-        (
-            str(ROOT / "src/color_card_toolkit/resources/templates/转平贴底纸模板.docx"),
-            "resources/templates",
-        ),
-    ]
-    + rapidocr_datas,
+    datas=template_datas + rapidocr_datas,
     hiddenimports=["rapidocr_onnxruntime"],
     hookspath=[],
     hooksconfig={},

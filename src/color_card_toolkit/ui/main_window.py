@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from color_card_toolkit.ui.main_image_crop_page import MainImageCropPage
 from color_card_toolkit.ui.scan_rename_page import ScanRenamePage
+from color_card_toolkit.ui.spu_label_page import SpuLabelPage
 from color_card_toolkit.ui.stack_to_flat_page import StackToFlatPage
 
 
@@ -29,16 +30,19 @@ class MainWindow(QMainWindow):
         self._stack_to_flat_page = StackToFlatPage(on_back=self.show_home)
         self._scan_rename_page = ScanRenamePage(on_back=self.show_home)
         self._main_image_crop_page = MainImageCropPage(on_back=self.show_home)
+        self._spu_label_page = SpuLabelPage(on_back=self.show_home)
 
         self._home_page.stack_to_flat_requested.connect(self.show_stack_to_flat)
         self._home_page.scan_rename_requested.connect(self.show_scan_rename)
         self._home_page.main_image_crop_requested.connect(self.show_main_image_crop)
+        self._home_page.spu_label_requested.connect(self.show_spu_label)
         self._home_page.unavailable_requested.connect(self.show_unavailable)
 
         self._stack.addWidget(self._home_page)
         self._stack.addWidget(self._stack_to_flat_page)
         self._stack.addWidget(self._scan_rename_page)
         self._stack.addWidget(self._main_image_crop_page)
+        self._stack.addWidget(self._spu_label_page)
         self.setCentralWidget(self._stack)
 
     def show_home(self) -> None:
@@ -53,6 +57,9 @@ class MainWindow(QMainWindow):
     def show_main_image_crop(self) -> None:
         self._stack.setCurrentWidget(self._main_image_crop_page)
 
+    def show_spu_label(self) -> None:
+        self._stack.setCurrentWidget(self._spu_label_page)
+
     def show_unavailable(self) -> None:
         QMessageBox.information(self, "暂未开放", "该功能暂未开放。")
 
@@ -61,6 +68,7 @@ class HomePage(QWidget):
     stack_to_flat_requested = Signal()
     scan_rename_requested = Signal()
     main_image_crop_requested = Signal()
+    spu_label_requested = Signal()
     unavailable_requested = Signal()
 
     def __init__(self) -> None:
@@ -84,7 +92,7 @@ class HomePage(QWidget):
             ("叠贴转平贴模板生成", self.stack_to_flat_requested.emit),
             ("色卡扫描图改名", self.scan_rename_requested.emit),
             ("主图截图及名称更改", self.main_image_crop_requested.emit),
-            ("SPU名称生成不干胶模板", self.unavailable_requested.emit),
+            ("SPU名称生成不干胶模板", self.spu_label_requested.emit),
         ]
         for index, (text, callback) in enumerate(entries):
             row = index // 2

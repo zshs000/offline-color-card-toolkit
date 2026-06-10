@@ -4,13 +4,14 @@
 
 线下色卡采集工具集是一个本地桌面软件。软件安装后，需要在电脑上生成快捷入口，快捷入口名称为“线下色卡采集工具集”。
 
-用户点击快捷入口后进入首页，首页提供三个功能入口：
+用户点击快捷入口后进入首页，首页提供四个功能入口：
 
 1. 叠贴转平贴模板生成
-2. 主图截图及名称更改
-3. SPU名称生成不干胶模板
+2. 色卡扫描图改名
+3. 主图截图及名称更改
+4. SPU名称生成不干胶模板
 
-本项目第一阶段只实现功能 1。功能 2、功能 3 暂缓实现，只保留需求文档入口。
+当前四个功能入口均已实现。
 
 ## 2. 技术与运行要求
 
@@ -26,23 +27,23 @@
 
 | 功能 | 状态 | 文档 |
 | --- | --- | --- |
-| 叠贴转平贴模板生成 | 第一阶段实现 | [feature-01-stack-to-flat-template.md](feature-01-stack-to-flat-template.md) |
-| 主图截图及名称更改 | 暂缓实现 | [feature-02-main-image-crop-rename.md](feature-02-main-image-crop-rename.md) |
-| SPU名称生成不干胶模板 | 暂缓实现 | [feature-03-spu-label-template.md](feature-03-spu-label-template.md) |
+| 叠贴转平贴模板生成 | 已实现 | [feature-01-stack-to-flat-template.md](feature-01-stack-to-flat-template.md) |
+| 色卡扫描图改名 | 已实现 | [feature-04-color-card-scan-rename.md](feature-04-color-card-scan-rename.md) |
+| 主图截图及名称更改 | 已实现 | [feature-02-main-image-crop-rename.md](feature-02-main-image-crop-rename.md) |
+| SPU名称生成不干胶模板 | 已实现 | [feature-03-spu-label-template.md](feature-03-spu-label-template.md) |
 
-## 4. 第一阶段范围
+## 4. 当前实现范围
 
-第一阶段只交付“叠贴转平贴模板生成”：
+当前交付范围：
 
-- 首页展示三个入口，但第 2、3 功能可显示为暂未开放。
-- 完成第 1 功能的图片选择、离线 OCR 识别、识别结果确认、分组校验、Word 模板生成。
+- 首页展示四个入口。
+- 完成叠贴转平贴模板生成的图片选择、离线 OCR 识别、识别结果确认、分组校验、Word 模板生成。
+- 完成色卡扫描图改名的输出目录选择、图片批量选择、左上角名称识别、原图复制改名保存。
+- 完成主图截图及名称更改的截图尺寸选择、输出目录选择、图片批量选择、左上角名称识别、截图改名保存。
+- 完成 SPU 名称生成不干胶模板的 Excel 第一工作表读取、固定模板展示、Word 模板分页写入。
 - 内置平贴 Word 模板随软件一起打包。
-- 输出一个 Word 文件，包含所有识别成功且校验通过的色卡组。
 
 ## 5. 暂不包含
 
-- 不实现第 2 功能的截图、裁剪、重命名流程。
-- 不实现第 3 功能的 Excel 到 Word 不干胶模板流程。
 - 不接入在线 OCR 或云端识别服务。
-- 不训练专用目标检测模型；第一阶段优先使用 OCR 坐标、规则聚类和人工确认页兜底。
-
+- 不训练专用目标检测模型；当前优先使用 OCR 坐标、规则聚类和人工确认页兜底。

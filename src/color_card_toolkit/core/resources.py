@@ -17,3 +17,7 @@ def resource_path(relative_path: str) -> Path:
 
 def flat_template_path() -> Path:
     return resource_path("resources/templates/转平贴底纸模板.docx")
+
+
+def spu_label_template_path() -> Path:
+    return resource_path("resources/templates/8144-不干胶贴模板.docx")

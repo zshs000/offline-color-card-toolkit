@@ -13,6 +13,7 @@ env/
 # Build outputs
 build/
 dist/
+dist-rebuild*/
 *.egg-info/
 
 # Local files
