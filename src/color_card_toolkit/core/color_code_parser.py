@@ -56,7 +56,7 @@ def parse_color_codes(blocks: list[OcrBlock]) -> ParsedColorCodes:
     if not candidates:
         return ParsedColorCodes(codes=[], orientation="unknown", warnings=["未识别到色号"])
 
-    vertical_candidates = [_clean_block(block) for block in blocks if _is_vertical_code_candidate(block.text)]
+    vertical_candidates = [_clean_vertical_block(block) for block in blocks if _is_vertical_code_candidate(block.text)]
     vertical_columns = _best_vertical_columns(vertical_candidates)
     rows = _cluster_blocks(candidates, "y")
     best_row = _best_cluster(rows)
@@ -67,22 +67,23 @@ def parse_color_codes(blocks: list[OcrBlock]) -> ParsedColorCodes:
     column_count = sum(len(cluster.blocks) for cluster in best_columns)
 
     if _should_use_vertical_columns(vertical_columns, row_count):
-        ordered = _ordered_vertical(vertical_columns)
+        codes = _codes_from_vertical_columns(vertical_columns)
         orientation = "vertical"
     elif column_count >= 6 and column_count > row_count + 2:
-        ordered = _ordered_vertical(best_columns)
+        codes = _codes_from_vertical_columns(best_columns)
         orientation = "vertical"
     elif best_row and row_count >= 2:
         ordered = sorted(best_row.blocks, key=lambda block: block.center_x)
+        codes = _expand_merged_numeric_runs([normalize_text(block.text) for block in ordered])
         orientation = "horizontal"
     elif best_columns:
-        ordered = _ordered_vertical(best_columns)
+        codes = _codes_from_vertical_columns(best_columns)
         orientation = "vertical"
     else:
         ordered = sorted(candidates, key=lambda block: (block.center_y, block.center_x))
+        codes = _expand_merged_numeric_runs([normalize_text(block.text) for block in ordered])
         orientation = "unknown"
 
-    codes = _expand_merged_numeric_runs([normalize_text(block.text) for block in ordered])
     codes = _drop_outlier_codes(codes)
     missing = find_missing_numeric_codes(codes)
     warnings: list[str] = []
@@ -94,20 +95,30 @@ def parse_color_codes(blocks: list[OcrBlock]) -> ParsedColorCodes:
 
 def find_missing_numeric_codes(codes: list[str]) -> list[str]:
     numeric_codes = [code for code in codes if code.isdigit()]
-    if len(numeric_codes) < 3 or len(numeric_codes) != len(codes):
+    if len(numeric_codes) < 3:
         return []
 
     numbers = sorted({int(code) for code in numeric_codes})
     if not numbers:
         return []
 
-    width = max(len(code) for code in numeric_codes)
+    width = _missing_code_width(numeric_codes)
     missing = [number for number in range(numbers[0], numbers[-1] + 1) if number not in numbers]
     return [str(number).zfill(width) for number in missing]
 
 
+def _missing_code_width(numeric_codes: list[str]) -> int:
+    if all(len(code) > 1 and code.startswith("0") for code in numeric_codes):
+        return max(len(code) for code in numeric_codes)
+    return 0
+
+
 def _clean_block(block: OcrBlock) -> OcrBlock:
     return OcrBlock(text=normalize_text(block.text), confidence=block.confidence, box=block.box)
+
+
+def _clean_vertical_block(block: OcrBlock) -> OcrBlock:
+    return OcrBlock(text=_normalize_vertical_code_text(block.text), confidence=block.confidence, box=block.box)
 
 
 def _is_candidate_code(text: str) -> bool:
@@ -127,7 +138,7 @@ def _is_candidate_code(text: str) -> bool:
 
 
 def _is_vertical_code_candidate(text: str) -> bool:
-    normalized = normalize_text(text).upper()
+    normalized = _normalize_vertical_code_text(text)
     if not normalized:
         return False
     if any(keyword in normalized.lower() for keyword in _NOISE_KEYWORDS):
@@ -135,6 +146,13 @@ def _is_vertical_code_candidate(text: str) -> bool:
     if re.search(r"[\u4e00-\u9fff]", normalized):
         return False
     return bool(re.fullmatch(r"(?:[A-Z]{0,2}\d{1,3}[A-Z]{0,2}|\d{1,3})", normalized))
+
+
+def _normalize_vertical_code_text(text: str) -> str:
+    normalized = normalize_text(text).upper().replace(" ", "")
+    if re.search(r"\d", normalized):
+        normalized = normalized.translate(str.maketrans({"O": "0", "I": "1", "L": "1", "|": "1"}))
+    return re.sub(r"[^0-9A-Z\u4e00-\u9fff]", "", normalized)
 
 
 def _expand_merged_numeric_runs(codes: list[str]) -> list[str]:
@@ -257,6 +275,202 @@ def _ordered_vertical(columns: list[_Cluster]) -> list[OcrBlock]:
     for column in sorted(columns, key=lambda cluster: cluster.axis_value):
         ordered.extend(sorted(column.blocks, key=lambda block: block.center_y))
     return ordered
+
+
+def _codes_from_vertical_columns(columns: list[_Cluster]) -> list[str]:
+    column_codes: list[list[str]] = []
+    for column in sorted(columns, key=lambda cluster: cluster.axis_value):
+        column_blocks = sorted(column.blocks, key=lambda block: block.center_y)
+        column_codes.append(_repair_vertical_column_codes(column_blocks))
+    column_codes = _complete_vertical_column_ranges(column_codes)
+    codes: list[str] = []
+    for codes_in_column in column_codes:
+        codes.extend(codes_in_column)
+    return _expand_merged_numeric_runs(codes)
+
+
+def _repair_vertical_column_codes(blocks: list[OcrBlock]) -> list[str]:
+    if not blocks:
+        return []
+
+    texts = [_normalize_vertical_code_text(block.text) for block in blocks]
+    slots = _vertical_slots(blocks)
+    sequence_start = _best_vertical_sequence_start(texts, slots)
+    if sequence_start is None:
+        return [text for text in texts if text]
+
+    repaired: list[str] = []
+    for text, slot in zip(texts, slots):
+        if not text:
+            continue
+        expected_number = sequence_start + slot
+        if expected_number <= 0:
+            repaired.append(text)
+            continue
+        expected_text = str(expected_number)
+        if _should_repair_vertical_code(text, expected_text):
+            repaired.append(expected_text)
+        else:
+            repaired.append(text)
+    return repaired
+
+
+def _vertical_slots(blocks: list[OcrBlock]) -> list[int]:
+    if len(blocks) <= 1:
+        return list(range(len(blocks)))
+
+    centers = [block.center_y for block in blocks]
+    diffs = [current - previous for previous, current in zip(centers, centers[1:]) if current - previous > 4]
+    if not diffs:
+        return list(range(len(blocks)))
+
+    gap = median(diffs)
+    if gap <= 0:
+        return list(range(len(blocks)))
+
+    first = centers[0]
+    slots: list[int] = []
+    last_slot = -1
+    for center in centers:
+        slot = int(round((center - first) / gap))
+        if slot <= last_slot:
+            slot = last_slot + 1
+        slots.append(slot)
+        last_slot = slot
+    return slots
+
+
+def _best_vertical_sequence_start(texts: list[str], slots: list[int]) -> int | None:
+    starts: dict[int, int] = {}
+    numeric_count = 0
+    for text, slot in zip(texts, slots):
+        if not text.isdigit():
+            continue
+        numeric_count += 1
+        value = int(text)
+        starts[value - slot] = starts.get(value - slot, 0) + 1
+
+    if numeric_count < 4 or not starts:
+        return None
+
+    start, score = max(starts.items(), key=lambda item: (item[1], -abs(item[0])))
+    if score < max(3, int(numeric_count * 0.35)):
+        return None
+    return start
+
+
+def _should_repair_vertical_code(text: str, expected_text: str) -> bool:
+    if text == expected_text:
+        return False
+    if _is_protected_alphanumeric_code(text):
+        return False
+    if text.isdigit():
+        return len(text) <= 3
+    return bool(re.fullmatch(r"[0-9A-Z]{1,4}", text))
+
+
+def _is_protected_alphanumeric_code(text: str) -> bool:
+    return bool(re.fullmatch(r"(?:[A-Z]\d{1,3}|\d{1,3}[A-Z])", text))
+
+
+def _complete_vertical_column_ranges(column_codes: list[list[str]]) -> list[list[str]]:
+    if not column_codes:
+        return []
+
+    completed = [_complete_dense_numeric_range(codes) for codes in column_codes]
+    if len(completed) < 2:
+        return completed
+
+    left_codes = completed[0]
+    right_codes = completed[1]
+    right_first = _first_numeric_value(right_codes)
+    left_numbers = _numeric_values(left_codes)
+    if right_first is None or len(left_numbers) < 8:
+        return completed
+
+    left_start = min(left_numbers)
+    if left_start <= 2 or _has_leading_alphanumeric(left_codes):
+        left_start = 1
+    left_end = right_first - 1
+    if left_end >= left_start and _range_density(left_numbers, left_start, left_end) >= 0.75:
+        completed[0] = _complete_numeric_range_preserving_alphanumerics(left_codes, left_start, left_end)
+    return completed
+
+
+def _complete_dense_numeric_range(codes: list[str]) -> list[str]:
+    numbers = _numeric_values(codes)
+    if len(numbers) < 8:
+        return codes
+    start = min(numbers)
+    end = max(numbers)
+    if end <= start:
+        return codes
+    if _range_density(numbers, start, end) < 0.85:
+        return codes
+    return _complete_numeric_range_preserving_alphanumerics(codes, start, end)
+
+
+def _complete_numeric_range_preserving_alphanumerics(codes: list[str], start: int, end: int) -> list[str]:
+    before_first: list[str] = []
+    after_number: dict[int, list[str]] = {}
+    trailing: list[str] = []
+    seen_alphanumeric: set[str] = set()
+
+    for index, code in enumerate(codes):
+        if code.isdigit():
+            continue
+        if code in seen_alphanumeric:
+            continue
+        seen_alphanumeric.add(code)
+        previous_number = _previous_numeric_value(codes, index)
+        if previous_number is None:
+            before_first.append(code)
+        elif start <= previous_number <= end:
+            after_number.setdefault(previous_number, []).append(code)
+        else:
+            trailing.append(code)
+
+    completed: list[str] = list(before_first)
+    for number in range(start, end + 1):
+        completed.append(str(number))
+        completed.extend(after_number.get(number, []))
+    completed.extend(trailing)
+    return completed
+
+
+def _numeric_values(codes: list[str]) -> list[int]:
+    return [int(code) for code in codes if code.isdigit()]
+
+
+def _first_numeric_value(codes: list[str]) -> int | None:
+    for code in codes:
+        if code.isdigit():
+            return int(code)
+    return None
+
+
+def _previous_numeric_value(codes: list[str], index: int) -> int | None:
+    for code in reversed(codes[:index]):
+        if code.isdigit():
+            return int(code)
+    return None
+
+
+def _has_leading_alphanumeric(codes: list[str]) -> bool:
+    for code in codes:
+        if code.isdigit():
+            return False
+        if code:
+            return True
+    return False
+
+
+def _range_density(numbers: list[int], start: int, end: int) -> float:
+    width = end - start + 1
+    if width <= 0:
+        return 0.0
+    in_range = {number for number in numbers if start <= number <= end}
+    return len(in_range) / width
 
 
 def _drop_outlier_codes(codes: list[str]) -> list[str]:

@@ -18,6 +18,11 @@ def recognize_image(image_path: str | Path, ocr_engine: OcrEngine) -> ImageRecog
     raw_name = extract_group_name(path, blocks)
     group = parse_group_name(raw_name)
     parsed_codes = parse_color_codes(blocks)
+    strip_blocks = _recognize_color_code_strips(path, ocr_engine)
+    if strip_blocks:
+        strip_codes = parse_color_codes(strip_blocks)
+        if _should_prefer_strip_codes(strip_codes, parsed_codes):
+            parsed_codes = strip_codes
     warnings = list(parsed_codes.warnings)
     if not raw_name:
         warnings.append("左上角组名识别为空，请手动填写")
@@ -33,6 +38,26 @@ def recognize_image(image_path: str | Path, ocr_engine: OcrEngine) -> ImageRecog
         warnings=warnings,
         confidence=confidence,
     )
+
+
+def _recognize_color_code_strips(image_path: Path, ocr_engine: OcrEngine) -> list[OcrBlock]:
+    recognizer = getattr(ocr_engine, "recognize_color_code_strips", None)
+    if not callable(recognizer):
+        return []
+    try:
+        return list(recognizer(image_path))
+    except Exception:
+        return []
+
+
+def _should_prefer_strip_codes(strip_codes, parsed_codes) -> bool:
+    if strip_codes.orientation != "vertical":
+        return False
+    if len(strip_codes.codes) < 8:
+        return False
+    if parsed_codes.orientation != "vertical":
+        return len(strip_codes.codes) >= len(parsed_codes.codes)
+    return len(strip_codes.codes) >= len(parsed_codes.codes) + 3
 
 
 def extract_group_name(image_path: Path, blocks: list[OcrBlock]) -> str:

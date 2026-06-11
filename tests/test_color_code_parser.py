@@ -103,5 +103,29 @@ def test_vertical_parser_keeps_only_code_columns_with_alphanumeric_codes() -> No
     assert parsed.codes == left_codes + right_codes
 
 
+def test_vertical_parser_completes_leading_number_after_alphanumeric_prefix() -> None:
+    left_codes = ["1A"] + [str(number) for number in range(2, 26)]
+    right_codes = [str(number) for number in range(26, 48)] + ["A1", "A2", "A3"]
+    blocks = [block(code, 130, 210 + index * 30) for index, code in enumerate(left_codes)]
+    blocks.extend(block(code, 1160, 210 + index * 30) for index, code in enumerate(right_codes))
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.codes == ["1A"] + [str(number) for number in range(1, 48)] + ["A1", "A2", "A3"]
+    assert parsed.missing_codes == []
+
+
+def test_vertical_parser_completes_boundary_number_before_right_column() -> None:
+    left_codes = [str(number) for number in range(1, 27)]
+    right_codes = [str(number) for number in range(28, 53)] + ["A1", "A2"]
+    blocks = [block(code, 130, 210 + index * 30) for index, code in enumerate(left_codes)]
+    blocks.extend(block(code, 1160, 210 + index * 30) for index, code in enumerate(right_codes))
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.codes == [str(number) for number in range(1, 53)] + ["A1", "A2"]
+    assert parsed.missing_codes == []
+
+
 def test_missing_numeric_codes_preserve_width() -> None:
     assert find_missing_numeric_codes(["01", "02", "04"]) == ["03"]
