@@ -84,7 +84,7 @@ def _insert_before_section_properties(body, element) -> None:
 
 def _fill_table(table: Table, header: str, codes: list[str]) -> None:
     table.cell(0, 0).text = header
-    _align_cell(table.cell(0, 0), bold=True)
+    _align_cell(table.cell(0, 0), bold=True, alignment=WD_ALIGN_PARAGRAPH.LEFT)
 
     for row_index in CODE_ROW_INDICES:
         for column_index in range(6):

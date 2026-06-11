@@ -24,7 +24,7 @@ def test_word_generator_fills_header_and_24_code_slots(tmp_path: Path) -> None:
     assert len(document.tables) == 2
     assert document.tables[0].cell(0, 0).text == "PU88 (1)"
     assert document.tables[1].cell(0, 0).text == "PU88 (2)"
-    assert document.tables[0].cell(0, 0).paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert document.tables[0].cell(0, 0).paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.LEFT
 
     first_page_codes = []
     for row_index in CODE_ROW_INDICES:
