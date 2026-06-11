@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "offline-color-card-toolkit"
 version = "0.1.0"
-description = "线下色卡采集工具集"
+description = "线下色卡采集、图片改名、截图和不干胶模板生成工具集"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
