@@ -16,8 +16,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from color_card_toolkit.core.image_rename import rename_scan_images
+from color_card_toolkit.core.image_rename import ImageProcessResult, rename_scan_images
 from color_card_toolkit.core.ocr_engine import RapidOcrEngine
+from color_card_toolkit.ui.batch_worker import run_batch_task
 
 
 class ScanRenamePage(QWidget):
@@ -25,7 +26,7 @@ class ScanRenamePage(QWidget):
         super().__init__()
         self._on_back = on_back
         self._image_paths: list[Path] = []
-        self._ocr_engine = None
+        self._batch_controller = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -46,27 +47,27 @@ class ScanRenamePage(QWidget):
         output_box = QGroupBox("保存设置")
         output_layout = QGridLayout(output_box)
         self.output_folder_edit = QLineEdit(str(self._default_output_folder()))
-        browse_output = QPushButton("选择地址")
-        browse_output.clicked.connect(self._pick_output_folder)
+        self.browse_output_button = QPushButton("选择地址")
+        self.browse_output_button.clicked.connect(self._pick_output_folder)
         output_layout.addWidget(QLabel("色卡改名后扫描图片保存的地址："), 0, 0)
         output_layout.addWidget(self.output_folder_edit, 0, 1)
-        output_layout.addWidget(browse_output, 0, 2)
+        output_layout.addWidget(self.browse_output_button, 0, 2)
         layout.addWidget(output_box)
 
         image_box = QGroupBox("图片选择")
         image_layout = QHBoxLayout(image_box)
         self.image_summary = QLabel("未选择图片")
-        pick_images = QPushButton("选择改名的色卡扫描图")
-        pick_images.clicked.connect(self._pick_images)
+        self.pick_images_button = QPushButton("选择改名的色卡扫描图")
+        self.pick_images_button.clicked.connect(self._pick_images)
         image_layout.addWidget(self.image_summary, 1)
-        image_layout.addWidget(pick_images)
+        image_layout.addWidget(self.pick_images_button)
         layout.addWidget(image_box)
 
         footer = QHBoxLayout()
         footer.addStretch(1)
-        confirm_button = QPushButton("确认")
-        confirm_button.clicked.connect(self._confirm_rename)
-        footer.addWidget(confirm_button)
+        self.confirm_button = QPushButton("确认")
+        self.confirm_button.clicked.connect(self._confirm_rename)
+        footer.addWidget(self.confirm_button)
         layout.addStretch(1)
         layout.addLayout(footer)
 
@@ -97,17 +98,71 @@ class ScanRenamePage(QWidget):
 
         output_folder_text = self.output_folder_edit.text().strip()
         output_folder = Path(output_folder_text) if output_folder_text else self._default_output_folder()
+        self._set_processing(True)
+        failures: list[str] = []
+        engine_holder: dict[str, object] = {}
 
-        try:
-            if self._ocr_engine is None:
-                self._ocr_engine = RapidOcrEngine()
-            results = rename_scan_images(self._image_paths, output_folder, self._ocr_engine)
-        except Exception as exc:
-            QMessageBox.critical(self, "改名失败", str(exc))
-            return
+        def process(path: Path) -> ImageProcessResult:
+            if "engine" not in engine_holder:
+                engine_holder["engine"] = RapidOcrEngine()
+            results = rename_scan_images([path], output_folder, engine_holder["engine"])
+            if not results:
+                raise RuntimeError("未生成输出文件")
+            return results[0]
 
+        def item_failed(index: int, label: str, message: str) -> None:
+            failures.append(f"{label}：{message}")
+
+        self._batch_controller = run_batch_task(
+            self._image_paths,
+            process,
+            on_progress=self._on_rename_progress,
+            on_finished=lambda results, failed_count: self._on_rename_finished(
+                results,
+                failed_count,
+                output_folder,
+                failures,
+            ),
+            on_failed=self._on_rename_failed,
+            on_item_failed=item_failed,
+            parent=self,
+        )
+
+    def _on_rename_progress(self, current: int, total: int, label: str) -> None:
+        self.image_summary.setText(f"正在改名 {current}/{total}：{label}")
+
+    def _on_rename_finished(
+        self,
+        results: list[ImageProcessResult],
+        failed_count: int,
+        output_folder: Path,
+        failures: list[str],
+    ) -> None:
+        self._batch_controller = None
+        self._set_processing(False)
+        success_count = len(results)
         self._clear_selected_images()
-        QMessageBox.information(self, "改名完成", f"已保存 {len(results)} 张图片到：\n{output_folder}")
+        if failed_count:
+            detail = "\n".join(failures[:5])
+            suffix = f"\n\n失败明细：\n{detail}" if detail else ""
+            QMessageBox.warning(
+                self,
+                "改名完成（部分失败）",
+                f"已保存 {success_count} 张图片到：\n{output_folder}\n\n失败 {failed_count} 张。{suffix}",
+            )
+            return
+        QMessageBox.information(self, "改名完成", f"已保存 {success_count} 张图片到：\n{output_folder}")
+
+    def _on_rename_failed(self, message: str) -> None:
+        self._batch_controller = None
+        self._set_processing(False)
+        QMessageBox.critical(self, "改名失败", message)
+
+    def _set_processing(self, processing: bool) -> None:
+        self.output_folder_edit.setEnabled(not processing)
+        self.browse_output_button.setEnabled(not processing)
+        self.pick_images_button.setEnabled(not processing)
+        self.confirm_button.setEnabled(not processing)
 
     def _clear_selected_images(self) -> None:
         self._image_paths = []

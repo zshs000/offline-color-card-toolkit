@@ -27,6 +27,7 @@ from color_card_toolkit.core.ocr_engine import RapidOcrEngine
 from color_card_toolkit.core.recognition import recognize_image
 from color_card_toolkit.core.resources import flat_template_path
 from color_card_toolkit.core.word_generator import generate_flat_template_docx
+from color_card_toolkit.ui.batch_worker import run_batch_task
 
 
 class StackToFlatPage(QWidget):
@@ -37,7 +38,7 @@ class StackToFlatPage(QWidget):
         self._on_back = on_back
         self._image_paths: list[Path] = []
         self._results: list[ImageRecognitionResult] = []
-        self._ocr_engine = None
+        self._batch_controller = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -81,13 +82,13 @@ class StackToFlatPage(QWidget):
         image_box = QGroupBox("图片选择")
         image_layout = QHBoxLayout(image_box)
         self.image_summary = QLabel("未选择图片")
-        pick_images = QPushButton("选择图片")
-        pick_images.clicked.connect(self._pick_images)
-        recognize_button = QPushButton("开始识别")
-        recognize_button.clicked.connect(self._recognize_images)
+        self.pick_images_button = QPushButton("选择图片")
+        self.pick_images_button.clicked.connect(self._pick_images)
+        self.recognize_button = QPushButton("开始识别")
+        self.recognize_button.clicked.connect(self._recognize_images)
         image_layout.addWidget(self.image_summary, 1)
-        image_layout.addWidget(pick_images)
-        image_layout.addWidget(recognize_button)
+        image_layout.addWidget(self.pick_images_button)
+        image_layout.addWidget(self.recognize_button)
         layout.addWidget(image_box)
 
         self.table = QTableWidget(0, len(self.HEADERS))
@@ -99,9 +100,9 @@ class StackToFlatPage(QWidget):
 
         footer = QHBoxLayout()
         footer.addStretch(1)
-        generate_button = QPushButton("生成 Word")
-        generate_button.clicked.connect(self._generate_word)
-        footer.addWidget(generate_button)
+        self.generate_button = QPushButton("生成 Word")
+        self.generate_button.clicked.connect(self._generate_word)
+        footer.addWidget(self.generate_button)
         layout.addLayout(footer)
 
     def _open_template(self) -> None:
@@ -136,44 +137,58 @@ class StackToFlatPage(QWidget):
             QMessageBox.information(self, "未选择图片", "请先选择 .jpg/.jpeg/.png 图片。")
             return
         self._results = []
-        try:
-            if self._ocr_engine is None:
-                self._ocr_engine = RapidOcrEngine()
-        except Exception as exc:
-            self._results = [
-                self._manual_result_for_image(path, f"OCR 初始化失败：{exc}。已使用文件名作为组名，请手动修正。")
-                for path in self._image_paths
-            ]
-            self._populate_table(self._results)
-            QMessageBox.warning(self, "OCR 初始化失败", "已为所有图片生成可编辑行，请手动填写组名、序号和色号。")
-            return
+        self._set_processing(True)
 
-        failed_count = 0
-        for path in self._image_paths:
+        engine_holder: dict[str, object] = {}
+
+        def process(path: Path) -> ImageRecognitionResult:
             try:
-                self._results.append(recognize_image(path, self._ocr_engine))
+                if "engine" not in engine_holder:
+                    engine_holder["engine"] = RapidOcrEngine()
+                return recognize_image(path, engine_holder["engine"])
             except Exception as exc:
-                failed_count += 1
-                self._results.append(
-                    self._manual_result_for_image(path, f"OCR 识别失败：{exc}。已使用文件名作为组名，请手动修正。")
-                )
+                return _manual_result_for_image(path, f"OCR 识别失败：{exc}。已使用文件名作为组名，请手动修正。")
+
+        self._batch_controller = run_batch_task(
+            self._image_paths,
+            process,
+            on_progress=self._on_recognition_progress,
+            on_finished=lambda results, failed_count: self._on_recognition_finished(
+                results,
+                failed_count + _manual_failure_count(results),
+            ),
+            on_failed=self._on_recognition_failed,
+            parent=self,
+        )
+
+    def _on_recognition_progress(self, current: int, total: int, label: str) -> None:
+        self.image_summary.setText(f"正在识别 {current}/{total}：{label}")
+
+    def _on_recognition_finished(self, results: list[ImageRecognitionResult], failed_count: int) -> None:
+        self._batch_controller = None
+        self._results = list(results)
         self._populate_table(self._results)
+        self._set_processing(False)
+        self.image_summary.setText(f"已识别 {len(self._results)} 张图片")
         if failed_count:
-            QMessageBox.warning(self, "部分图片识别失败", f"{failed_count} 张图片识别失败，已生成可编辑行供手动修正。")
+            QMessageBox.warning(
+                self,
+                "部分图片识别失败",
+                f"{failed_count} 张图片识别失败，已生成可编辑行供手动修正。",
+            )
+
+    def _on_recognition_failed(self, message: str) -> None:
+        self._batch_controller = None
+        self._set_processing(False)
+        QMessageBox.critical(self, "识别失败", message)
+
+    def _set_processing(self, processing: bool) -> None:
+        self.pick_images_button.setEnabled(not processing)
+        self.recognize_button.setEnabled(not processing)
+        self.generate_button.setEnabled(not processing)
 
     def _manual_result_for_image(self, path: Path, warning: str) -> ImageRecognitionResult:
-        fallback_name = path.stem.strip()
-        parsed = parse_group_name(fallback_name)
-        return ImageRecognitionResult(
-            image_path=path,
-            raw_name=fallback_name,
-            base_name=parsed.base_name,
-            sequence=parsed.sequence,
-            color_codes=[],
-            explicit_sequence=parsed.explicit_sequence,
-            warnings=[warning],
-            confidence=0.0,
-        )
+        return _manual_result_for_image(path, warning)
 
     def _populate_table(self, results: list[ImageRecognitionResult]) -> None:
         self.table.setRowCount(len(results))
@@ -284,3 +299,26 @@ class StackToFlatPage(QWidget):
 
         self._clear_recognition_state()
         QMessageBox.information(self, "生成完成", f"Word 已生成：\n{generated}")
+
+
+def _manual_result_for_image(path: Path, warning: str) -> ImageRecognitionResult:
+    fallback_name = path.stem.strip()
+    parsed = parse_group_name(fallback_name)
+    return ImageRecognitionResult(
+        image_path=path,
+        raw_name=fallback_name,
+        base_name=parsed.base_name,
+        sequence=parsed.sequence,
+        color_codes=[],
+        explicit_sequence=parsed.explicit_sequence,
+        warnings=[warning],
+        confidence=0.0,
+    )
+
+
+def _manual_failure_count(results: list[ImageRecognitionResult]) -> int:
+    return sum(
+        1
+        for result in results
+        if any(warning.startswith("OCR 识别失败") for warning in result.warnings)
+    )

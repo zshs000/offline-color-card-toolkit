@@ -57,3 +57,58 @@ def test_output_folder_defaults_to_user_output_directory() -> None:
     page = StackToFlatPage(on_back=lambda: None)
 
     assert Path(page.output_folder_edit.text()).name == "线下色卡采集工具集输出"
+
+
+def test_recognize_images_runs_batch_and_populates_table(monkeypatch, tmp_path: Path) -> None:
+    _app()
+    page = StackToFlatPage(on_back=lambda: None)
+    source = tmp_path / "PU88.png"
+    page._image_paths = [source]
+
+    monkeypatch.setattr(stack_to_flat_page_module, "RapidOcrEngine", lambda: object())
+    monkeypatch.setattr(
+        stack_to_flat_page_module,
+        "recognize_image",
+        lambda image_path, ocr_engine: ImageRecognitionResult(
+            image_path=image_path,
+            raw_name="PU88",
+            base_name="PU88",
+            sequence=1,
+            color_codes=["01"],
+        ),
+    )
+    monkeypatch.setattr(stack_to_flat_page_module, "run_batch_task", _run_batch_task_immediately)
+
+    page._recognize_images()
+
+    assert len(page._results) == 1
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 2).text() == "PU88"
+    assert page.image_summary.text() == "已识别 1 张图片"
+    assert page.pick_images_button.isEnabled()
+    assert page.recognize_button.isEnabled()
+    assert page.generate_button.isEnabled()
+
+
+def _run_batch_task_immediately(
+    items,
+    processor,
+    *,
+    on_progress,
+    on_finished,
+    on_failed,
+    on_item_failed=None,
+    parent=None,
+):
+    results = []
+    failed_count = 0
+    for index, item in enumerate(items):
+        on_progress(index + 1, len(items), Path(item).name)
+        try:
+            results.append(processor(item))
+        except Exception as exc:
+            failed_count += 1
+            if on_item_failed is not None:
+                on_item_failed(index, Path(item).name, str(exc))
+    on_finished(results, failed_count)
+    return object()

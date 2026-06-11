@@ -48,14 +48,15 @@ def test_scan_rename_page_clears_selected_images_after_success(monkeypatch, tmp_
     output = tmp_path / "renamed" / "PU88.jpg"
     page.output_folder_edit.setText(str(output.parent))
     page._image_paths = [source]
-    page._ocr_engine = object()
     page.image_summary.setText("已选择 1 张图片")
 
+    monkeypatch.setattr(scan_rename_module, "RapidOcrEngine", lambda: object())
     monkeypatch.setattr(
         scan_rename_module,
         "rename_scan_images",
-        lambda image_paths, output_dir, ocr_engine: [ImageProcessResult(source, output, "PU88")],
+        lambda image_paths, output_dir, ocr_engine: [ImageProcessResult(image_paths[0], output, "PU88")],
     )
+    monkeypatch.setattr(scan_rename_module, "run_batch_task", _run_batch_task_immediately)
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: QMessageBox.Ok)
 
     page._confirm_rename()
@@ -63,6 +64,10 @@ def test_scan_rename_page_clears_selected_images_after_success(monkeypatch, tmp_
     assert page._image_paths == []
     assert page.image_summary.text() == "未选择图片"
     assert page.output_folder_edit.text() == str(output.parent)
+    assert page.output_folder_edit.isEnabled()
+    assert page.browse_output_button.isEnabled()
+    assert page.confirm_button.isEnabled()
+    assert page.pick_images_button.isEnabled()
 
 
 def test_main_image_crop_page_defaults_to_crop_output_folder_and_10cm() -> None:
@@ -81,15 +86,16 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     page.output_folder_edit.setText(str(output.parent))
     page.size_combo.setCurrentIndex(1)
     page._image_paths = [source]
-    page._ocr_engine = object()
     page.image_summary.setText("已选择 1 张图片")
     captured: dict[str, object] = {}
 
     def fake_crop(image_paths, output_dir, ocr_engine, *, crop_size_cm):
         captured["crop_size_cm"] = crop_size_cm
-        return [ImageProcessResult(source, output, "Main01")]
+        return [ImageProcessResult(image_paths[0], output, "Main01")]
 
+    monkeypatch.setattr(main_crop_module, "RapidOcrEngine", lambda: object())
     monkeypatch.setattr(main_crop_module, "crop_main_images", fake_crop)
+    monkeypatch.setattr(main_crop_module, "run_batch_task", _run_batch_task_immediately)
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: QMessageBox.Ok)
 
     page._confirm_crop()
@@ -98,6 +104,34 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     assert page._image_paths == []
     assert page.image_summary.text() == "未选择图片"
     assert page.output_folder_edit.text() == str(output.parent)
+    assert page.output_folder_edit.isEnabled()
+    assert page.browse_output_button.isEnabled()
+    assert page.confirm_button.isEnabled()
+    assert page.pick_images_button.isEnabled()
+
+
+def _run_batch_task_immediately(
+    items,
+    processor,
+    *,
+    on_progress,
+    on_finished,
+    on_failed,
+    on_item_failed=None,
+    parent=None,
+):
+    results = []
+    failed_count = 0
+    for index, item in enumerate(items):
+        on_progress(index + 1, len(items), Path(item).name)
+        try:
+            results.append(processor(item))
+        except Exception as exc:
+            failed_count += 1
+            if on_item_failed is not None:
+                on_item_failed(index, Path(item).name, str(exc))
+    on_finished(results, failed_count)
+    return object()
 
 
 def test_home_page_exposes_four_entries_and_routes_new_features() -> None:
