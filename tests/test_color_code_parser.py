@@ -139,6 +139,25 @@ def test_horizontal_parser_repairs_single_ocr_outlier_inside_dense_sequence() ->
     assert parsed.missing_codes == []
 
 
+def test_horizontal_parser_completes_missing_codes_when_layout_gap_matches_slots() -> None:
+    blocks = [block(str(number).zfill(2), 100 + index * 100, 250) for index, number in enumerate(range(1, 8))]
+    blocks.append(block("12", 100 + 11 * 100, 250))
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.codes == [str(number).zfill(2) for number in range(1, 13)]
+    assert parsed.missing_codes == []
+
+
+def test_horizontal_parser_does_not_complete_missing_code_without_layout_gap() -> None:
+    blocks = [block(str(number).zfill(2), 100 + index * 100, 250) for index, number in enumerate([1, 2, 3, 4, 5, 7])]
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.codes == ["01", "02", "03", "04", "05", "07"]
+    assert parsed.missing_codes == ["06"]
+
+
 def test_vertical_codes_are_sorted_left_column_then_right_column() -> None:
     blocks = [block(str(number), 80, 20 + index * 30) for index, number in enumerate(range(47, 70))]
     blocks.extend(block(str(number), 880, 20 + index * 30) for index, number in enumerate(range(70, 93)))

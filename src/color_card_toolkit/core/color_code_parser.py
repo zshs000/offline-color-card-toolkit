@@ -79,7 +79,7 @@ def parse_color_codes(blocks: list[OcrBlock]) -> ParsedColorCodes:
         orientation = "horizontal"
     elif best_row and row_count >= 2:
         ordered = sorted(best_row.blocks, key=lambda block: block.center_x)
-        codes = _expand_merged_numeric_runs([normalize_text(block.text) for block in ordered])
+        codes = _codes_from_horizontal_row(ordered)
         orientation = "horizontal"
     elif best_columns:
         codes = _codes_from_vertical_columns(best_columns)
@@ -239,6 +239,51 @@ def _codes_from_dense_numeric_row(row: _Cluster) -> list[str]:
     ordered = sorted(row.blocks, key=lambda block: block.center_x)
     texts = [normalize_text(block.text) for block in ordered if normalize_text(block.text).isdigit()]
     return _expand_merged_numeric_runs(texts)
+
+
+def _codes_from_horizontal_row(blocks: list[OcrBlock]) -> list[str]:
+    ordered = sorted(blocks, key=lambda block: block.center_x)
+    codes = _expand_merged_numeric_runs([normalize_text(block.text) for block in ordered])
+    return _complete_horizontal_layout_gaps(ordered, codes)
+
+
+def _complete_horizontal_layout_gaps(blocks: list[OcrBlock], codes: list[str]) -> list[str]:
+    if len(blocks) != len(codes) or len(codes) < 4:
+        return codes
+    if not all(code.isdigit() for code in codes):
+        return codes
+
+    numbers = [int(code) for code in codes]
+    centers = [block.center_x for block in blocks]
+    adjacent_gaps = [
+        centers[index + 1] - centers[index]
+        for index in range(len(numbers) - 1)
+        if numbers[index + 1] - numbers[index] == 1 and centers[index + 1] > centers[index]
+    ]
+    if len(adjacent_gaps) < 2:
+        return codes
+
+    normal_gap = median(adjacent_gaps)
+    if normal_gap <= 0:
+        return codes
+
+    completed: list[str] = [codes[0]]
+    for index in range(len(codes) - 1):
+        current_number = numbers[index]
+        next_number = numbers[index + 1]
+        number_gap = next_number - current_number
+        pixel_gap = centers[index + 1] - centers[index]
+        if 1 < number_gap <= 12 and _matches_missing_layout_slots(pixel_gap, normal_gap, number_gap):
+            width = _sequence_width(codes[index], codes[index + 1])
+            completed.extend(_format_expected_number(number, width) for number in range(current_number + 1, next_number))
+        completed.append(codes[index + 1])
+    return completed
+
+
+def _matches_missing_layout_slots(pixel_gap: float, normal_gap: float, number_gap: int) -> bool:
+    slot_gap = pixel_gap / normal_gap
+    tolerance = max(0.45, number_gap * 0.25)
+    return abs(slot_gap - number_gap) <= tolerance
 
 
 def _looks_like_dense_sequence(parts: list[str]) -> bool:
