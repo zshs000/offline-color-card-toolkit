@@ -64,6 +64,8 @@ def _should_prefer_strip_codes(strip_codes, parsed_codes) -> bool:
             return True
         if _has_significantly_fewer_missing_codes(strip_codes, parsed_codes):
             return strip_numeric_count >= parsed_numeric_count
+        if _strip_codes_extend_leading_sequence(strip_codes.codes, parsed_codes.codes):
+            return True
         if parsed_codes.orientation != "horizontal":
             return strip_numeric_count >= parsed_numeric_count + 3
         return strip_numeric_count >= parsed_numeric_count + 3
@@ -83,6 +85,16 @@ def _parsed_codes_are_mostly_noise(parsed_codes) -> bool:
 
 def _has_significantly_fewer_missing_codes(strip_codes, parsed_codes) -> bool:
     return len(parsed_codes.missing_codes) >= len(strip_codes.missing_codes) + 3
+
+
+def _strip_codes_extend_leading_sequence(strip_codes: list[str], parsed_codes: list[str]) -> bool:
+    strip_numbers = [int(code) for code in strip_codes if code.isdigit() and len(code) <= 3]
+    parsed_numbers = [int(code) for code in parsed_codes if code.isdigit() and len(code) <= 3]
+    if len(strip_numbers) < len(parsed_numbers) + 2 or not parsed_numbers:
+        return False
+    if min(strip_numbers) >= min(parsed_numbers):
+        return False
+    return set(parsed_numbers).issubset(strip_numbers)
 
 
 def extract_group_name(image_path: Path, blocks: list[OcrBlock]) -> str:

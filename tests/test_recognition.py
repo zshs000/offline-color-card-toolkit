@@ -75,3 +75,16 @@ def test_horizontal_strip_codes_replace_same_count_main_result_with_fewer_missin
     )
 
     assert _should_prefer_strip_codes(strip, main)
+
+
+def test_horizontal_strip_codes_replace_suffix_main_result_when_leading_codes_were_missed() -> None:
+    main = ParsedColorCodes(
+        codes=["03", "04", "05", "06", "07", "08", "09", "10", "11", "12"],
+        orientation="horizontal",
+    )
+    strip = ParsedColorCodes(
+        codes=["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"],
+        orientation="horizontal",
+    )
+
+    assert _should_prefer_strip_codes(strip, main)
