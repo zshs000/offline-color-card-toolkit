@@ -209,6 +209,8 @@ def _infer_dense_merged_width(codes: list[str]) -> int:
     numeric_codes = [code for code in codes if code.isdigit()]
     if not numeric_codes:
         return 0
+    if any(_is_zero_padded_merged_run(code) for code in numeric_codes):
+        return 2
 
     for width in (2, 3):
         if any(len(code) % width != 0 for code in numeric_codes):
@@ -219,6 +221,10 @@ def _infer_dense_merged_width(codes: list[str]) -> int:
     return 0
 
 
+def _is_zero_padded_merged_run(code: str) -> bool:
+    return code.isdigit() and code.startswith("0") and len(code) >= 6 and len(code) % 2 == 0
+
+
 def _best_dense_numeric_row(rows: list[_Cluster]) -> _Cluster | None:
     scored: list[tuple[int, float, _Cluster]] = []
     for row in rows:
@@ -227,7 +233,7 @@ def _best_dense_numeric_row(rows: list[_Cluster]) -> _Cluster | None:
         numeric_codes = [code for code in codes if code.isdigit() and len(code) <= 3]
         if len(numeric_codes) < 6:
             continue
-        if not _looks_like_dense_sequence(numeric_codes):
+        if not (_looks_like_dense_sequence(numeric_codes) or _looks_like_gapped_sequence(numeric_codes)):
             continue
         scored.append((len(numeric_codes), _cluster_span(row.blocks, "x"), row))
     if not scored:
@@ -235,10 +241,30 @@ def _best_dense_numeric_row(rows: list[_Cluster]) -> _Cluster | None:
     return max(scored, key=lambda item: (item[0], item[1]))[2]
 
 
+def _looks_like_gapped_sequence(parts: list[str]) -> bool:
+    if len(parts) < 6 or not all(part.isdigit() for part in parts):
+        return False
+    numbers = [int(part) for part in parts]
+    if numbers[0] > 3:
+        return False
+    if any(current <= previous for previous, current in zip(numbers, numbers[1:])):
+        return False
+    span = numbers[-1] - numbers[0] + 1
+    return span <= len(numbers) + max(4, int(len(numbers) * 0.25))
+
+
 def _codes_from_dense_numeric_row(row: _Cluster) -> list[str]:
     ordered = sorted(row.blocks, key=lambda block: block.center_x)
-    texts = [normalize_text(block.text) for block in ordered if normalize_text(block.text).isdigit()]
-    return _expand_merged_numeric_runs(texts)
+    numeric_blocks: list[OcrBlock] = []
+    texts: list[str] = []
+    for block in ordered:
+        text = normalize_text(block.text)
+        if not text.isdigit():
+            continue
+        numeric_blocks.append(block)
+        texts.append(text)
+    codes = _expand_merged_numeric_runs(texts)
+    return _complete_horizontal_layout_gaps(numeric_blocks, codes)
 
 
 def _codes_from_horizontal_row(blocks: list[OcrBlock]) -> list[str]:

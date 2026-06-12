@@ -128,6 +128,47 @@ def test_horizontal_parser_keeps_single_long_dense_merged_row_over_page_noise() 
     assert parsed.missing_codes == []
 
 
+def test_horizontal_parser_splits_single_zero_padded_merged_row_with_real_gaps() -> None:
+    blocks = [
+        block("1918(1)", 200, 80, 180, 80),
+        block("現貨版", 2100, 250, 500, 130),
+        block("0102030405060708091112131415161718202123242526282930", 60, 735, 4245, 98),
+        block("1918", 3800, 250, 315, 140),
+    ]
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.codes == [
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+        "06",
+        "07",
+        "08",
+        "09",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "20",
+        "21",
+        "23",
+        "24",
+        "25",
+        "26",
+        "28",
+        "29",
+        "30",
+    ]
+    assert parsed.missing_codes == ["10", "19", "22", "27"]
+
+
 def test_horizontal_parser_repairs_single_ocr_outlier_inside_dense_sequence() -> None:
     blocks = [block(str(number).zfill(2), 100 + index * 120, 250) for index, number in enumerate(range(1, 9))]
     blocks.append(block("60", 100 + 8 * 120, 250))
