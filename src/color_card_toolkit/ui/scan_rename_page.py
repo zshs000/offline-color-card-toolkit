@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
@@ -100,12 +101,15 @@ class ScanRenamePage(QWidget):
         output_folder = Path(output_folder_text) if output_folder_text else self._default_output_folder()
         self._set_processing(True)
         failures: list[str] = []
-        engine_holder: dict[str, object] = {}
+        engine_holder = threading.local()
 
         def process(path: Path) -> ImageProcessResult:
-            if "engine" not in engine_holder:
-                engine_holder["engine"] = RapidOcrEngine()
-            results = rename_scan_images([path], output_folder, engine_holder["engine"])
+            if not hasattr(engine_holder, "engine"):
+                engine_holder.engine = RapidOcrEngine(
+                    intra_op_num_threads=1,
+                    inter_op_num_threads=1,
+                )
+            results = rename_scan_images([path], output_folder, engine_holder.engine)
             if not results:
                 raise RuntimeError("未生成输出文件")
             return results[0]
@@ -125,6 +129,7 @@ class ScanRenamePage(QWidget):
             ),
             on_failed=self._on_rename_failed,
             on_item_failed=item_failed,
+            max_workers=2,
             parent=self,
         )
 

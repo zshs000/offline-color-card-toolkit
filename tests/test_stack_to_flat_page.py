@@ -64,8 +64,13 @@ def test_recognize_images_runs_batch_and_populates_table(monkeypatch, tmp_path: 
     page = StackToFlatPage(on_back=lambda: None)
     source = tmp_path / "PU88.png"
     page._image_paths = [source]
+    captured: dict[str, object] = {}
 
-    monkeypatch.setattr(stack_to_flat_page_module, "RapidOcrEngine", lambda: object())
+    def fake_engine(**kwargs):
+        captured["engine_kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(stack_to_flat_page_module, "RapidOcrEngine", fake_engine)
     monkeypatch.setattr(
         stack_to_flat_page_module,
         "recognize_image",
@@ -77,7 +82,11 @@ def test_recognize_images_runs_batch_and_populates_table(monkeypatch, tmp_path: 
             color_codes=["01"],
         ),
     )
-    monkeypatch.setattr(stack_to_flat_page_module, "run_batch_task", _run_batch_task_immediately)
+    monkeypatch.setattr(
+        stack_to_flat_page_module,
+        "run_batch_task",
+        lambda *args, **kwargs: _run_batch_task_immediately(*args, captured=captured, **kwargs),
+    )
 
     page._recognize_images()
 
@@ -88,6 +97,8 @@ def test_recognize_images_runs_batch_and_populates_table(monkeypatch, tmp_path: 
     assert page.pick_images_button.isEnabled()
     assert page.recognize_button.isEnabled()
     assert page.generate_button.isEnabled()
+    assert captured["max_workers"] == 2
+    assert captured["engine_kwargs"] == {"intra_op_num_threads": 1, "inter_op_num_threads": 1}
 
 
 def _run_batch_task_immediately(
@@ -98,8 +109,12 @@ def _run_batch_task_immediately(
     on_finished,
     on_failed,
     on_item_failed=None,
+    max_workers=1,
     parent=None,
+    captured=None,
 ):
+    if captured is not None:
+        captured["max_workers"] = max_workers
     results = []
     failed_count = 0
     for index, item in enumerate(items):

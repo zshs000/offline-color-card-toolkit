@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
@@ -107,15 +108,18 @@ class MainImageCropPage(QWidget):
         crop_size_cm = int(self.size_combo.currentData())
         self._set_processing(True)
         failures: list[str] = []
-        engine_holder: dict[str, object] = {}
+        engine_holder = threading.local()
 
         def process(path: Path) -> ImageProcessResult:
-            if "engine" not in engine_holder:
-                engine_holder["engine"] = RapidOcrEngine()
+            if not hasattr(engine_holder, "engine"):
+                engine_holder.engine = RapidOcrEngine(
+                    intra_op_num_threads=1,
+                    inter_op_num_threads=1,
+                )
             results = crop_main_images(
                 [path],
                 output_folder,
-                engine_holder["engine"],
+                engine_holder.engine,
                 crop_size_cm=crop_size_cm,
             )
             if not results:
@@ -137,6 +141,7 @@ class MainImageCropPage(QWidget):
             ),
             on_failed=self._on_crop_failed,
             on_item_failed=item_failed,
+            max_workers=2,
             parent=self,
         )
 

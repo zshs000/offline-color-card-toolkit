@@ -46,17 +46,26 @@ def test_scan_rename_page_clears_selected_images_after_success(monkeypatch, tmp_
     page = ScanRenamePage(on_back=lambda: None)
     source = tmp_path / "scan.jpg"
     output = tmp_path / "renamed" / "PU88.jpg"
+    captured: dict[str, object] = {}
     page.output_folder_edit.setText(str(output.parent))
     page._image_paths = [source]
     page.image_summary.setText("已选择 1 张图片")
 
-    monkeypatch.setattr(scan_rename_module, "RapidOcrEngine", lambda: object())
+    def fake_engine(**kwargs):
+        captured["engine_kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(scan_rename_module, "RapidOcrEngine", fake_engine)
     monkeypatch.setattr(
         scan_rename_module,
         "rename_scan_images",
         lambda image_paths, output_dir, ocr_engine: [ImageProcessResult(image_paths[0], output, "PU88")],
     )
-    monkeypatch.setattr(scan_rename_module, "run_batch_task", _run_batch_task_immediately)
+    monkeypatch.setattr(
+        scan_rename_module,
+        "run_batch_task",
+        lambda *args, **kwargs: _run_batch_task_immediately(*args, captured=captured, **kwargs),
+    )
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: QMessageBox.Ok)
 
     page._confirm_rename()
@@ -68,6 +77,8 @@ def test_scan_rename_page_clears_selected_images_after_success(monkeypatch, tmp_
     assert page.browse_output_button.isEnabled()
     assert page.confirm_button.isEnabled()
     assert page.pick_images_button.isEnabled()
+    assert captured["max_workers"] == 2
+    assert captured["engine_kwargs"] == {"intra_op_num_threads": 1, "inter_op_num_threads": 1}
 
 
 def test_main_image_crop_page_defaults_to_crop_output_folder_and_10cm() -> None:
@@ -93,9 +104,17 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
         captured["crop_size_cm"] = crop_size_cm
         return [ImageProcessResult(image_paths[0], output, "Main01")]
 
-    monkeypatch.setattr(main_crop_module, "RapidOcrEngine", lambda: object())
+    def fake_engine(**kwargs):
+        captured["engine_kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(main_crop_module, "RapidOcrEngine", fake_engine)
     monkeypatch.setattr(main_crop_module, "crop_main_images", fake_crop)
-    monkeypatch.setattr(main_crop_module, "run_batch_task", _run_batch_task_immediately)
+    monkeypatch.setattr(
+        main_crop_module,
+        "run_batch_task",
+        lambda *args, **kwargs: _run_batch_task_immediately(*args, captured=captured, **kwargs),
+    )
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: QMessageBox.Ok)
 
     page._confirm_crop()
@@ -108,6 +127,8 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     assert page.browse_output_button.isEnabled()
     assert page.confirm_button.isEnabled()
     assert page.pick_images_button.isEnabled()
+    assert captured["max_workers"] == 2
+    assert captured["engine_kwargs"] == {"intra_op_num_threads": 1, "inter_op_num_threads": 1}
 
 
 def _run_batch_task_immediately(
@@ -118,8 +139,12 @@ def _run_batch_task_immediately(
     on_finished,
     on_failed,
     on_item_failed=None,
+    max_workers=1,
     parent=None,
+    captured=None,
 ):
+    if captured is not None:
+        captured["max_workers"] = max_workers
     results = []
     failed_count = 0
     for index, item in enumerate(items):

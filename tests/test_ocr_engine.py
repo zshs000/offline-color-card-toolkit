@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from color_card_toolkit.core.color_code_parser import parse_color_codes
 from color_card_toolkit.core.models import OcrBlock
-from color_card_toolkit.core.ocr_engine import _merge_horizontal_variant_blocks, _select_supplemental_blocks
+from color_card_toolkit.core.ocr_engine import (
+    RapidOcrEngine,
+    _merge_horizontal_variant_blocks,
+    _select_supplemental_blocks,
+)
 
 
 def block(text: str, x: float, y: float, w: float = 80, h: float = 36) -> OcrBlock:
@@ -11,6 +15,20 @@ def block(text: str, x: float, y: float, w: float = 80, h: float = 36) -> OcrBlo
         confidence=0.96,
         box=((x, y), (x + w, y), (x + w, y + h), (x, y + h)),
     )
+
+
+def test_rapid_ocr_engine_passes_thread_limits_to_factory(monkeypatch) -> None:
+    captured: dict[str, int] = {}
+
+    def fake_create_engine(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(RapidOcrEngine, "_create_engine", staticmethod(fake_create_engine))
+
+    RapidOcrEngine(intra_op_num_threads=1, inter_op_num_threads=1)
+
+    assert captured == {"intra_op_num_threads": 1, "inter_op_num_threads": 1}
 
 
 def test_horizontal_variant_blocks_keep_color_code_row_over_page_noise() -> None:

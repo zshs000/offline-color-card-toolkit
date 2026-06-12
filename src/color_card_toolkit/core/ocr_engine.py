@@ -16,8 +16,18 @@ class OcrEngine(Protocol):
 
 
 class RapidOcrEngine:
-    def __init__(self) -> None:
-        self._engine = self._create_engine()
+    def __init__(
+        self,
+        *,
+        intra_op_num_threads: int | None = None,
+        inter_op_num_threads: int | None = None,
+    ) -> None:
+        kwargs = {}
+        if intra_op_num_threads is not None:
+            kwargs["intra_op_num_threads"] = intra_op_num_threads
+        if inter_op_num_threads is not None:
+            kwargs["inter_op_num_threads"] = inter_op_num_threads
+        self._engine = self._create_engine(**kwargs)
 
     def recognize(self, image_path: str | Path) -> list[OcrBlock]:
         raw_result = self._call_engine(str(image_path), return_word_box=False)
@@ -106,7 +116,7 @@ class RapidOcrEngine:
         return self._engine(image)
 
     @staticmethod
-    def _create_engine():
+    def _create_engine(**kwargs):
         try:
             from rapidocr_onnxruntime import RapidOCR
         except ImportError:
@@ -116,7 +126,7 @@ class RapidOcrEngine:
                 raise RuntimeError(
                     "未安装 RapidOCR。请先执行：python -m pip install rapidocr-onnxruntime"
                 ) from exc
-        return RapidOCR()
+        return RapidOCR(**kwargs)
 
     @staticmethod
     def _extract_records(raw_result):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, QUrl, Qt
@@ -139,13 +140,16 @@ class StackToFlatPage(QWidget):
         self._results = []
         self._set_processing(True)
 
-        engine_holder: dict[str, object] = {}
+        engine_holder = threading.local()
 
         def process(path: Path) -> ImageRecognitionResult:
             try:
-                if "engine" not in engine_holder:
-                    engine_holder["engine"] = RapidOcrEngine()
-                return recognize_image(path, engine_holder["engine"])
+                if not hasattr(engine_holder, "engine"):
+                    engine_holder.engine = RapidOcrEngine(
+                        intra_op_num_threads=1,
+                        inter_op_num_threads=1,
+                    )
+                return recognize_image(path, engine_holder.engine)
             except Exception as exc:
                 return _manual_result_for_image(path, f"OCR 识别失败：{exc}。已使用文件名作为组名，请手动修正。")
 
@@ -158,6 +162,7 @@ class StackToFlatPage(QWidget):
                 failed_count + _manual_failure_count(results),
             ),
             on_failed=self._on_recognition_failed,
+            max_workers=2,
             parent=self,
         )
 

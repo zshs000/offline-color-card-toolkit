@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from color_card_toolkit.core.ocr_engine import OcrEngine
 
 DEFAULT_DPI = 300
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_OUTPUT_PATH_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -81,8 +83,9 @@ def rename_scan_images(
             recognized_name = _safe_filename(source.stem) or "未识别"
             warnings.append("左上角名称识别为空，已使用原文件名")
 
-        output_path = unique_output_path(folder, recognized_name, source.suffix)
-        shutil.copy2(source, output_path)
+        with _OUTPUT_PATH_LOCK:
+            output_path = unique_output_path(folder, recognized_name, source.suffix)
+            shutil.copy2(source, output_path)
         results.append(ImageProcessResult(source, output_path, recognized_name, warnings))
 
     return results
@@ -108,8 +111,9 @@ def crop_main_images(
             recognized_name = _safe_filename(source.stem) or "未识别"
             warnings.append("左上角名称识别为空，已使用原文件名")
 
-        output_path = unique_output_path(folder, recognized_name, source.suffix)
-        _crop_image(source, output_path, crop_size_cm)
+        with _OUTPUT_PATH_LOCK:
+            output_path = unique_output_path(folder, recognized_name, source.suffix)
+            _crop_image(source, output_path, crop_size_cm)
         results.append(ImageProcessResult(source, output_path, recognized_name, warnings))
 
     return results

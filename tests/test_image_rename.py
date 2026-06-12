@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PIL import Image
 
+import color_card_toolkit.core.image_rename as image_rename_module
 from color_card_toolkit.core.image_rename import (
     crop_main_images,
     extract_top_left_name,
@@ -53,6 +56,40 @@ def test_rename_scan_images_copies_original_bytes_with_recognized_name(tmp_path:
     assert results[0].output_path == output_dir / "PU6159.jpg"
     assert results[0].output_path.read_bytes() == original_bytes
     assert results[0].recognized_name == "PU6159"
+
+
+def test_parallel_rename_scan_images_reserves_duplicate_output_names(monkeypatch, tmp_path: Path) -> None:
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    Image.new("RGB", (800, 600), "red").save(first)
+    Image.new("RGB", (800, 600), "blue").save(second)
+    output_dir = tmp_path / "renamed"
+    engine = FakeOcrEngine(
+        {
+            str(first): [block("PU6159", 30, 20)],
+            str(second): [block("PU6159", 30, 20)],
+        }
+    )
+    copy_barrier = threading.Barrier(2)
+
+    def slow_copy(source, destination):
+        try:
+            copy_barrier.wait(timeout=0.5)
+        except threading.BrokenBarrierError:
+            pass
+        Path(destination).write_bytes(Path(source).read_bytes())
+
+    monkeypatch.setattr(image_rename_module.shutil, "copy2", slow_copy)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda path: rename_scan_images([path], output_dir, engine)[0],
+                [first, second],
+            )
+        )
+
+    assert sorted(result.output_path.name for result in results) == ["PU6159-2.jpg", "PU6159.jpg"]
 
 
 def test_crop_main_images_uses_image_dpi_to_crop_requested_centimeters(tmp_path: Path) -> None:
