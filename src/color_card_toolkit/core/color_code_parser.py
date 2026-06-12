@@ -89,6 +89,7 @@ def parse_color_codes(blocks: list[OcrBlock]) -> ParsedColorCodes:
         codes = _expand_merged_numeric_runs([normalize_text(block.text) for block in ordered])
         orientation = "unknown"
 
+    codes = _repair_single_numeric_sequence_outliers(codes)
     codes = _drop_outlier_codes(codes)
     missing = find_missing_numeric_codes(codes)
     warnings: list[str] = []
@@ -252,6 +253,35 @@ def _looks_like_dense_sequence(parts: list[str]) -> bool:
     if span <= 0:
         return False
     return span <= len(numbers) + 3
+
+
+def _repair_single_numeric_sequence_outliers(codes: list[str]) -> list[str]:
+    repaired = list(codes)
+    numeric_positions = [index for index, code in enumerate(repaired) if code.isdigit()]
+    for position_index in range(1, len(numeric_positions) - 1):
+        previous_index = numeric_positions[position_index - 1]
+        current_index = numeric_positions[position_index]
+        next_index = numeric_positions[position_index + 1]
+
+        previous_code = repaired[previous_index]
+        current_code = repaired[current_index]
+        next_code = repaired[next_index]
+        previous_number = int(previous_code)
+        current_number = int(current_code)
+        next_number = int(next_code)
+        expected_number = previous_number + 1
+        if next_number != expected_number + 1 or current_number == expected_number:
+            continue
+        if len(current_code) > 3:
+            continue
+        repaired[current_index] = _format_expected_number(expected_number, _sequence_width(previous_code, next_code))
+    return repaired
+
+
+def _sequence_width(previous_code: str, next_code: str) -> int:
+    if previous_code.startswith("0") or next_code.startswith("0"):
+        return max(len(previous_code), len(next_code))
+    return 0
 
 
 def _split_by_expected_sequence(code: str, previous_codes: list[str]) -> list[str]:

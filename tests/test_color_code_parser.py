@@ -128,6 +128,17 @@ def test_horizontal_parser_keeps_single_long_dense_merged_row_over_page_noise() 
     assert parsed.missing_codes == []
 
 
+def test_horizontal_parser_repairs_single_ocr_outlier_inside_dense_sequence() -> None:
+    blocks = [block(str(number).zfill(2), 100 + index * 120, 250) for index, number in enumerate(range(1, 9))]
+    blocks.append(block("60", 100 + 8 * 120, 250))
+    blocks.extend(block(str(number), 100 + index * 120, 250) for index, number in enumerate(range(10, 14), start=9))
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.codes == [str(number).zfill(2) for number in range(1, 14)]
+    assert parsed.missing_codes == []
+
+
 def test_vertical_codes_are_sorted_left_column_then_right_column() -> None:
     blocks = [block(str(number), 80, 20 + index * 30) for index, number in enumerate(range(47, 70))]
     blocks.extend(block(str(number), 880, 20 + index * 30) for index, number in enumerate(range(70, 93)))
