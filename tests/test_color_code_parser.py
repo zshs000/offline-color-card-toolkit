@@ -60,6 +60,57 @@ def test_horizontal_parser_does_not_split_two_digit_codes_into_single_digits() -
     assert parsed.codes == [str(number) for number in range(1, 30)]
 
 
+def test_horizontal_parser_splits_dense_merged_row_without_single_code_anchors() -> None:
+    blocks = [
+        block("505", 3800, 250, 280, 140),
+        block('Width:52" Thickness:0.9mm', 3600, 440, 720, 60),
+        block("010203040507080910", 65, 735, 1890, 100),
+        block("111213141516171819", 1969, 737, 1920, 95),
+        block("2021", 3909, 737, 400, 95),
+    ]
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.orientation == "horizontal"
+    assert parsed.codes == [
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+    ]
+    assert parsed.missing_codes == ["06"]
+
+
+def test_horizontal_parser_splits_dense_merged_row_with_punctuation_noise() -> None:
+    blocks = [
+        block("0102030405060708", 65, 735, 1590, 105),
+        block("09", 1700, 735, 147, 77),
+        block("10.1112131415161718192021", 1850, 735, 2426, 98),
+    ]
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.orientation == "horizontal"
+    assert parsed.codes == [str(number).zfill(2) for number in range(1, 22)]
+    assert parsed.missing_codes == []
+
+
 def test_vertical_codes_are_sorted_left_column_then_right_column() -> None:
     blocks = [block(str(number), 80, 20 + index * 30) for index, number in enumerate(range(47, 70))]
     blocks.extend(block(str(number), 880, 20 + index * 30) for index, number in enumerate(range(70, 93)))
@@ -129,3 +180,7 @@ def test_vertical_parser_completes_boundary_number_before_right_column() -> None
 
 def test_missing_numeric_codes_preserve_width() -> None:
     assert find_missing_numeric_codes(["01", "02", "04"]) == ["03"]
+
+
+def test_missing_numeric_codes_ignores_implausibly_large_ranges() -> None:
+    assert find_missing_numeric_codes(["1", "2", "10000"]) == []

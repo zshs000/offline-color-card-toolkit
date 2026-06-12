@@ -21,6 +21,7 @@ _NOISE_KEYWORDS = (
     "现货",
     "现货版",
 )
+_MAX_MISSING_RANGE_WIDTH = 300
 
 
 @dataclass(frozen=True)
@@ -103,18 +104,20 @@ def find_missing_numeric_codes(codes: list[str]) -> list[str]:
         return []
 
     width = _missing_code_width(numeric_codes)
+    if numbers[-1] - numbers[0] + 1 > _MAX_MISSING_RANGE_WIDTH:
+        return []
     missing = [number for number in range(numbers[0], numbers[-1] + 1) if number not in numbers]
     return [str(number).zfill(width) for number in missing]
 
 
 def _missing_code_width(numeric_codes: list[str]) -> int:
-    if all(len(code) > 1 and code.startswith("0") for code in numeric_codes):
+    if any(len(code) > 1 and code.startswith("0") for code in numeric_codes):
         return max(len(code) for code in numeric_codes)
     return 0
 
 
 def _clean_block(block: OcrBlock) -> OcrBlock:
-    return OcrBlock(text=normalize_text(block.text), confidence=block.confidence, box=block.box)
+    return OcrBlock(text=_normalize_code_candidate_text(block.text), confidence=block.confidence, box=block.box)
 
 
 def _clean_vertical_block(block: OcrBlock) -> OcrBlock:
@@ -132,9 +135,26 @@ def _is_candidate_code(text: str) -> bool:
         return False
     if normalized.isdigit():
         return len(normalized) <= 24
+    if _is_dense_numeric_candidate(normalized):
+        return True
     if len(normalized) > 8:
         return False
     return bool(re.search(r"[\w\u4e00-\u9fff]", normalized))
+
+
+def _normalize_code_candidate_text(text: str) -> str:
+    normalized = normalize_text(text)
+    if _is_dense_numeric_candidate(normalized):
+        return re.sub(r"\D", "", normalized)
+    return normalized
+
+
+def _is_dense_numeric_candidate(text: str) -> bool:
+    normalized = normalize_text(text)
+    digits = re.sub(r"\D", "", normalized)
+    if len(digits) < 6 or len(digits) > 48:
+        return False
+    return bool(re.fullmatch(r"[\d\s.,，。:：;；\\-_/]+", normalized))
 
 
 def _is_vertical_code_candidate(text: str) -> bool:
@@ -173,11 +193,39 @@ def _expand_merged_numeric_runs(codes: list[str]) -> list[str]:
 def _fallback_expansion_width(codes: list[str]) -> int:
     numeric_widths = [len(code) for code in codes if code.isdigit() and 1 <= len(code) <= 3]
     if not numeric_widths:
-        return 0
+        return _infer_dense_merged_width(codes)
     multi_digit_widths = [width for width in numeric_widths if width >= 2]
     if multi_digit_widths:
         return int(median(multi_digit_widths))
     return int(median(numeric_widths))
+
+
+def _infer_dense_merged_width(codes: list[str]) -> int:
+    numeric_codes = [code for code in codes if code.isdigit()]
+    if len(numeric_codes) < 2:
+        return 0
+
+    for width in (2, 3):
+        if any(len(code) % width != 0 for code in numeric_codes):
+            continue
+        parts = [code[index : index + width] for code in numeric_codes for index in range(0, len(code), width)]
+        if _looks_like_dense_sequence(parts):
+            return width
+    return 0
+
+
+def _looks_like_dense_sequence(parts: list[str]) -> bool:
+    if len(parts) < 6 or not all(part.isdigit() for part in parts):
+        return False
+
+    numbers = [int(part) for part in parts]
+    if any(current <= previous for previous, current in zip(numbers, numbers[1:])):
+        return False
+
+    span = numbers[-1] - numbers[0] + 1
+    if span <= 0:
+        return False
+    return span <= len(numbers) + 3
 
 
 def _split_by_expected_sequence(code: str, previous_codes: list[str]) -> list[str]:
