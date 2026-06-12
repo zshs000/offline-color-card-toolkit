@@ -317,6 +317,8 @@ def _repair_single_numeric_sequence_outliers(codes: list[str]) -> list[str]:
         expected_number = previous_number + 1
         if next_number != expected_number + 1 or current_number == expected_number:
             continue
+        if abs(current_number - expected_number) < 10:
+            continue
         if len(current_code) > 3:
             continue
         repaired[current_index] = _format_expected_number(expected_number, _sequence_width(previous_code, next_code))
