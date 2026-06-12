@@ -62,6 +62,8 @@ def _should_prefer_strip_codes(strip_codes, parsed_codes) -> bool:
     if strip_codes.orientation == "horizontal":
         if _parsed_codes_are_mostly_noise(parsed_codes):
             return True
+        if _has_significantly_fewer_missing_codes(strip_codes, parsed_codes):
+            return strip_numeric_count >= parsed_numeric_count
         if parsed_codes.orientation != "horizontal":
             return strip_numeric_count >= parsed_numeric_count + 3
         return strip_numeric_count >= parsed_numeric_count + 3
@@ -77,6 +79,10 @@ def _parsed_codes_are_mostly_noise(parsed_codes) -> bool:
         return True
     numeric_count = _color_code_numeric_count(parsed_codes.codes)
     return numeric_count < 3 and numeric_count * 2 < len(parsed_codes.codes)
+
+
+def _has_significantly_fewer_missing_codes(strip_codes, parsed_codes) -> bool:
+    return len(parsed_codes.missing_codes) >= len(strip_codes.missing_codes) + 3
 
 
 def extract_group_name(image_path: Path, blocks: list[OcrBlock]) -> str:
