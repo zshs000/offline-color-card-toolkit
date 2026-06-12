@@ -65,7 +65,37 @@ class RapidOcrEngine:
                     if parsed:
                         side_blocks.append(_map_block(parsed, offset=(x1, y1), scale=scale))
             blocks.extend(_merge_strip_variant_blocks(side_blocks))
-        return blocks
+
+        horizontal_variants: list[list[OcrBlock]] = []
+        horizontal_configs = (
+            (0.01, 0.99, 0.34, 0.47, 3.0, 1.8),
+            (0.01, 0.99, 0.35, 0.45, 4.0, 2.0),
+            (0.01, 0.99, 0.32, 0.50, 3.0, 2.0),
+        )
+        for x1_ratio, x2_ratio, y1_ratio, y2_ratio, scale, contrast in horizontal_configs:
+            x1 = int(width * x1_ratio)
+            x2 = int(width * x2_ratio)
+            y1 = int(height * y1_ratio)
+            y2 = int(height * y2_ratio)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            crop = image.crop((x1, y1, x2, y2))
+            prepared = _prepare_color_code_crop(crop, int(scale), contrast)
+            crop_blocks: list[OcrBlock] = []
+            raw_result = self._call_engine(prepared, return_word_box=True)
+            for record in self._extract_records(raw_result):
+                row_blocks = _blocks_from_word_boxes(record, offset=(x1, y1), scale=scale)
+                if row_blocks:
+                    crop_blocks.extend(row_blocks)
+                    continue
+                parsed = self._parse_record(record)
+                if parsed:
+                    crop_blocks.append(_map_block(parsed, offset=(x1, y1), scale=scale))
+            horizontal_blocks = _merge_horizontal_variant_blocks(crop_blocks)
+            if horizontal_blocks:
+                horizontal_variants.append(horizontal_blocks)
+
+        return _select_supplemental_blocks(blocks, horizontal_variants)
 
     def _call_engine(self, image, return_word_box: bool):
         if return_word_box:
@@ -305,3 +335,79 @@ def _strip_row_score(block: OcrBlock, median_height: float) -> tuple[float, floa
     if text.isdigit() and len(text) > 2:
         score -= 0.2
     return (score, -abs(block.height - median_height), -len(text))
+
+
+def _merge_horizontal_variant_blocks(blocks: list[OcrBlock]) -> list[OcrBlock]:
+    candidates = [_clean_horizontal_block(block) for block in blocks if _looks_like_horizontal_code(block.text)]
+    if not candidates:
+        return []
+
+    heights = [max(block.height, 1.0) for block in candidates]
+    tolerance = max(12.0, float(np.median(heights)) * 1.2)
+    rows: list[list[OcrBlock]] = []
+    for block in sorted(candidates, key=lambda item: item.center_y):
+        matching_row = None
+        for row in rows:
+            row_center = sum(item.center_y for item in row) / len(row)
+            if abs(block.center_y - row_center) <= tolerance:
+                matching_row = row
+                break
+        if matching_row is None:
+            rows.append([block])
+        else:
+            matching_row.append(block)
+
+    best_row = max(rows, key=_horizontal_variant_score)
+    if _horizontal_variant_unit_count(best_row) < 6:
+        return []
+    return sorted(best_row, key=lambda block: block.center_x)
+
+
+def _select_supplemental_blocks(
+    side_blocks: list[OcrBlock], horizontal_variants: list[list[OcrBlock]]
+) -> list[OcrBlock]:
+    if not horizontal_variants:
+        return side_blocks
+    best_horizontal = max(horizontal_variants, key=_horizontal_variant_score)
+    if _horizontal_variant_unit_count(best_horizontal) >= 8:
+        return best_horizontal
+    return side_blocks + best_horizontal
+
+
+def _clean_horizontal_block(block: OcrBlock) -> OcrBlock:
+    return OcrBlock(text=_normalize_horizontal_text(block.text), confidence=block.confidence, box=block.box)
+
+
+def _looks_like_horizontal_code(text: str) -> bool:
+    normalized = _normalize_horizontal_text(text)
+    return bool(normalized and normalized.isdigit() and len(normalized) <= 80)
+
+
+def _normalize_horizontal_text(text: str) -> str:
+    normalized = re.sub(r"\s+", "", str(text).strip().upper())
+    if re.search(r"\d", normalized):
+        normalized = normalized.translate(str.maketrans({"O": "0", "I": "1", "L": "1", "|": "1"}))
+    if re.search(r"[A-Z\u4e00-\u9fff]", normalized):
+        return ""
+    return re.sub(r"\D", "", normalized)
+
+
+def _horizontal_variant_score(blocks: list[OcrBlock]) -> tuple[int, int, float, float]:
+    if not blocks:
+        return (0, 0, 0.0, 0.0)
+    confidence = sum(block.confidence for block in blocks) / len(blocks)
+    span = max(block.max_x for block in blocks) - min(block.min_x for block in blocks)
+    return (_horizontal_variant_unit_count(blocks), len(blocks), span, confidence)
+
+
+def _horizontal_variant_unit_count(blocks: list[OcrBlock]) -> int:
+    count = 0
+    for block in blocks:
+        text = _normalize_horizontal_text(block.text)
+        if not text.isdigit():
+            continue
+        if len(text) <= 3:
+            count += 1
+        else:
+            count += max(1, len(text) // 2)
+    return count

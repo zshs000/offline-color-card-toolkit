@@ -4,8 +4,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from color_card_toolkit.core.models import OcrBlock
-from color_card_toolkit.core.recognition import extract_group_name
+from color_card_toolkit.core.models import OcrBlock, ParsedColorCodes
+from color_card_toolkit.core.recognition import _should_prefer_strip_codes, extract_group_name
 
 
 def block(text: str, x: float, y: float, w: float = 20, h: float = 12) -> OcrBlock:
@@ -37,3 +37,13 @@ def test_extract_group_name_does_not_fallback_to_promo_text(tmp_path: Path) -> N
     ]
 
     assert extract_group_name(image_path, blocks) == ""
+
+
+def test_horizontal_strip_codes_replace_noisy_main_result() -> None:
+    main = ParsedColorCodes(codes=["1807(1)", "TOCK", "1807"], orientation="horizontal")
+    strip = ParsedColorCodes(
+        codes=["01", "03", "04", "05", "09", "10", "11", "12"],
+        orientation="horizontal",
+    )
+
+    assert _should_prefer_strip_codes(strip, main)

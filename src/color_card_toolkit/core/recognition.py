@@ -51,13 +51,32 @@ def _recognize_color_code_strips(image_path: Path, ocr_engine: OcrEngine) -> lis
 
 
 def _should_prefer_strip_codes(strip_codes, parsed_codes) -> bool:
-    if strip_codes.orientation != "vertical":
+    strip_numeric_count = _color_code_numeric_count(strip_codes.codes)
+    parsed_numeric_count = _color_code_numeric_count(parsed_codes.codes)
+    if strip_numeric_count < 8:
         return False
-    if len(strip_codes.codes) < 8:
-        return False
-    if parsed_codes.orientation != "vertical":
-        return len(strip_codes.codes) >= len(parsed_codes.codes)
-    return len(strip_codes.codes) >= len(parsed_codes.codes) + 3
+    if strip_codes.orientation == "vertical":
+        if parsed_codes.orientation != "vertical":
+            return strip_numeric_count >= parsed_numeric_count
+        return strip_numeric_count >= parsed_numeric_count + 3
+    if strip_codes.orientation == "horizontal":
+        if _parsed_codes_are_mostly_noise(parsed_codes):
+            return True
+        if parsed_codes.orientation != "horizontal":
+            return strip_numeric_count >= parsed_numeric_count + 3
+        return strip_numeric_count >= parsed_numeric_count + 3
+    return False
+
+
+def _color_code_numeric_count(codes: list[str]) -> int:
+    return sum(1 for code in codes if code.isdigit() and len(code) <= 3)
+
+
+def _parsed_codes_are_mostly_noise(parsed_codes) -> bool:
+    if not parsed_codes.codes:
+        return True
+    numeric_count = _color_code_numeric_count(parsed_codes.codes)
+    return numeric_count < 3 and numeric_count * 2 < len(parsed_codes.codes)
 
 
 def extract_group_name(image_path: Path, blocks: list[OcrBlock]) -> str:
