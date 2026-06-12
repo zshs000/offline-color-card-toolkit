@@ -111,6 +111,23 @@ def test_horizontal_parser_splits_dense_merged_row_with_punctuation_noise() -> N
     assert parsed.missing_codes == []
 
 
+def test_horizontal_parser_keeps_single_long_dense_merged_row_over_page_noise() -> None:
+    blocks = [
+        block("520(1)", 200, 80, 180, 80),
+        block("切", 900, 300, 40, 40),
+        block("520", 3800, 250, 315, 140),
+        block('Width:52" Thickness:0.9mm', 3600, 440, 730, 60),
+        block("現貨版", 2100, 650, 500, 130),
+        block("010203040506070809101112131415161718192021222324", 70, 735, 4245, 98),
+    ]
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.orientation == "horizontal"
+    assert parsed.codes == [str(number).zfill(2) for number in range(1, 25)]
+    assert parsed.missing_codes == []
+
+
 def test_vertical_codes_are_sorted_left_column_then_right_column() -> None:
     blocks = [block(str(number), 80, 20 + index * 30) for index, number in enumerate(range(47, 70))]
     blocks.extend(block(str(number), 880, 20 + index * 30) for index, number in enumerate(range(70, 93)))

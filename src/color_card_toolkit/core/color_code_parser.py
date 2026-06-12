@@ -61,6 +61,7 @@ def parse_color_codes(blocks: list[OcrBlock]) -> ParsedColorCodes:
     vertical_columns = _best_vertical_columns(vertical_candidates)
     rows = _cluster_blocks(candidates, "y")
     best_row = _best_cluster(rows)
+    dense_row = _best_dense_numeric_row(rows)
     columns = [cluster for cluster in _cluster_blocks(candidates, "x") if len(cluster.blocks) >= 3]
     best_columns = sorted(columns, key=lambda cluster: len(cluster.blocks), reverse=True)[:2]
 
@@ -73,6 +74,9 @@ def parse_color_codes(blocks: list[OcrBlock]) -> ParsedColorCodes:
     elif column_count >= 6 and column_count > row_count + 2:
         codes = _codes_from_vertical_columns(best_columns)
         orientation = "vertical"
+    elif dense_row:
+        codes = _codes_from_dense_numeric_row(dense_row)
+        orientation = "horizontal"
     elif best_row and row_count >= 2:
         ordered = sorted(best_row.blocks, key=lambda block: block.center_x)
         codes = _expand_merged_numeric_runs([normalize_text(block.text) for block in ordered])
@@ -133,10 +137,10 @@ def _is_candidate_code(text: str) -> bool:
         return False
     if re.search(r"\b\d+(?:\.\d+)?\s*(mm|cm|inch|in)\b", lowered):
         return False
-    if normalized.isdigit():
-        return len(normalized) <= 24
     if _is_dense_numeric_candidate(normalized):
         return True
+    if normalized.isdigit():
+        return len(normalized) <= 24
     if len(normalized) > 8:
         return False
     return bool(re.search(r"[\w\u4e00-\u9fff]", normalized))
@@ -152,7 +156,7 @@ def _normalize_code_candidate_text(text: str) -> str:
 def _is_dense_numeric_candidate(text: str) -> bool:
     normalized = normalize_text(text)
     digits = re.sub(r"\D", "", normalized)
-    if len(digits) < 6 or len(digits) > 48:
+    if len(digits) < 6 or len(digits) > 80:
         return False
     return bool(re.fullmatch(r"[\d\s.,，。:：;；\\-_/]+", normalized))
 
@@ -202,7 +206,7 @@ def _fallback_expansion_width(codes: list[str]) -> int:
 
 def _infer_dense_merged_width(codes: list[str]) -> int:
     numeric_codes = [code for code in codes if code.isdigit()]
-    if len(numeric_codes) < 2:
+    if not numeric_codes:
         return 0
 
     for width in (2, 3):
@@ -212,6 +216,28 @@ def _infer_dense_merged_width(codes: list[str]) -> int:
         if _looks_like_dense_sequence(parts):
             return width
     return 0
+
+
+def _best_dense_numeric_row(rows: list[_Cluster]) -> _Cluster | None:
+    scored: list[tuple[int, float, _Cluster]] = []
+    for row in rows:
+        ordered = sorted(row.blocks, key=lambda block: block.center_x)
+        codes = _expand_merged_numeric_runs([normalize_text(block.text) for block in ordered])
+        numeric_codes = [code for code in codes if code.isdigit() and len(code) <= 3]
+        if len(numeric_codes) < 6:
+            continue
+        if not _looks_like_dense_sequence(numeric_codes):
+            continue
+        scored.append((len(numeric_codes), _cluster_span(row.blocks, "x"), row))
+    if not scored:
+        return None
+    return max(scored, key=lambda item: (item[0], item[1]))[2]
+
+
+def _codes_from_dense_numeric_row(row: _Cluster) -> list[str]:
+    ordered = sorted(row.blocks, key=lambda block: block.center_x)
+    texts = [normalize_text(block.text) for block in ordered if normalize_text(block.text).isdigit()]
+    return _expand_merged_numeric_runs(texts)
 
 
 def _looks_like_dense_sequence(parts: list[str]) -> bool:
