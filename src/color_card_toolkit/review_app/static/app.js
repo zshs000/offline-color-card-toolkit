@@ -148,7 +148,7 @@ function renderDetail() {
   el.currentMeta.textContent = `${orientationLabel(item.orientation)} | ${splitLabel(item.split)} | ${item.width}x${item.height}`;
   el.currentTitle.textContent = item.itemId;
   el.imageFrame.style.aspectRatio = `${item.width} / ${item.height}`;
-  el.previewImage.src = toWebPath(item.previewImage);
+  el.previewImage.src = toWebPath(item.outputImage);
   el.previewImage.alt = item.itemId;
   el.wholeImageBad.checked = Boolean(feedback.wholeImageBad);
   el.itemNote.value = feedback.note ?? "";
