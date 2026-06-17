@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>色卡标注审查</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">本地审查</div>
+          <h1>色卡标注审查</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="copyStructured" class="btn">复制结构化文本</button>
+          <button id="copyHuman" class="btn">复制说明文本</button>
+          <button id="clearStorage" class="btn btn-ghost">清空本地记录</button>
+        </div>
+      </header>
+      <main class="layout">
+        <aside class="sidebar">
+          <div class="panel filters">
+            <label>
+              搜索
+              <input id="searchInput" type="search" placeholder="输入图片编号" />
+            </label>
+            <label>
+              方向
+              <select id="orientationFilter">
+                <option value="all">全部</option>
+                <option value="horizontal">横版</option>
+                <option value="vertical">竖版</option>
+              </select>
+            </label>
+            <label class="checkbox-row">
+              <input id="flaggedOnly" type="checkbox" />
+              只看已标错
+            </label>
+          </div>
+          <div class="panel item-list" id="itemList"></div>
+        </aside>
+        <section class="viewer-column">
+          <div class="panel viewer-panel">
+            <div class="viewer-head">
+              <div>
+                <div id="currentMeta" class="meta"></div>
+                <div id="currentTitle" class="title"></div>
+              </div>
+              <div class="viewer-actions">
+                <label class="checkbox-row">
+                  <input id="wholeImageBad" type="checkbox" />
+                  整张图有问题
+                </label>
+                <button id="nextItem" class="btn btn-ghost" type="button">下一张</button>
+              </div>
+            </div>
+            <div class="image-frame">
+              <img id="previewImage" alt="预览图" />
+              <div id="overlayLayer" class="overlay-layer"></div>
+            </div>
+            <label class="note-block">
+              整图备注
+              <textarea id="itemNote" rows="2" placeholder="写一下问题，比如：下边超了、顺序错了"></textarea>
+            </label>
+          </div>
+          <div class="panel box-panel">
+            <div class="panel-title">框列表</div>
+            <div id="boxList" class="box-list"></div>
+          </div>
+        </section>
+        <aside class="export-column">
+          <div class="panel export-panel">
+            <div class="panel-title">结构化文本</div>
+            <textarea id="structuredText" rows="16" readonly></textarea>
+          </div>
+          <div class="panel export-panel">
+            <div class="panel-title">说明文本</div>
+            <textarea id="humanText" rows="16" readonly></textarea>
+          </div>
+        </aside>
+      </main>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
