@@ -8,71 +8,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from color_card_toolkit.review_app.data import BoxFeedback, ItemFeedback, build_export_bundle, load_review_items
+from color_card_toolkit.review_app.data import export_yolo_dataset, load_annotation_payload, save_item_annotation
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STATIC_DIR = Path(__file__).resolve().with_name("static")
-DEFAULT_DATASET_ROOT = REPO_ROOT / "datasets" / "color_card_roi"
-
-
-def build_review_payload(dataset_root: Path) -> dict[str, object]:
-    dataset_root = dataset_root.resolve()
-    items = load_review_items(dataset_root)
-    return {
-        "datasetRoot": str(dataset_root.relative_to(REPO_ROOT.resolve())).replace('\\', '/'),
-        "items": [
-            {
-                "itemId": item.item_id,
-                "orientation": item.orientation,
-                "split": item.split,
-                "sourceImage": item.source_image,
-                "outputImage": item.output_image,
-                "previewImage": item.preview_image,
-                "labelPath": item.label_path,
-                "width": item.width,
-                "height": item.height,
-                "boxCount": item.box_count,
-                "boxes": [
-                    {
-                        "role": box.role,
-                        "classId": box.class_id,
-                        "centerX": box.center_x,
-                        "centerY": box.center_y,
-                        "width": box.width,
-                        "height": box.height,
-                    }
-                    for box in item.boxes
-                ],
-            }
-            for item in items
-        ],
-    }
-
-
-def build_export_payload(payload: dict[str, object]) -> dict[str, str]:
-    feedback_items: list[ItemFeedback] = []
-    for item in payload.get("items", []):
-        boxes = [BoxFeedback(role=box["role"], note=box.get("note", "")) for box in item.get("boxFeedback", [])]
-        feedback_items.append(
-            ItemFeedback(
-                item_id=item["itemId"],
-                whole_image_bad=bool(item.get("wholeImageBad", False)),
-                note=item.get("note", ""),
-                box_feedback=boxes,
-            )
-        )
-    bundle = build_export_bundle(feedback_items)
-    return {"structuredText": bundle.structured_text, "humanText": bundle.human_text}
+DEFAULT_RAW_ROOT = REPO_ROOT / "datasets" / "raw_images"
+DEFAULT_ANNOTATION_PATH = REPO_ROOT / "datasets" / "manual_annotations" / "annotations.json"
+DEFAULT_EXPORT_ROOT = REPO_ROOT / "datasets" / "manual_annotations" / "exports"
 
 
 class ReviewAppHandler(BaseHTTPRequestHandler):
-    dataset_root = DEFAULT_DATASET_ROOT
+    raw_root = DEFAULT_RAW_ROOT
+    annotation_path = DEFAULT_ANNOTATION_PATH
+    export_root = DEFAULT_EXPORT_ROOT
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
-        if path == "/api/review-data":
-            self._write_json(build_review_payload(self.dataset_root))
+        if path == "/api/annotation-data":
+            self._write_json(load_annotation_payload(self.raw_root, self.annotation_path, REPO_ROOT))
             return
         if path == "/":
             self._serve_file(STATIC_DIR / "index.html")
@@ -87,12 +41,22 @@ class ReviewAppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        if parsed.path != "/api/export":
+        if parsed.path not in {"/api/save-annotation", "/api/export-yolo"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         payload = json.loads(body.decode("utf-8") or "{}")
-        self._write_json(build_export_payload(payload))
+        if parsed.path == "/api/save-annotation":
+            save_item_annotation(
+                self.annotation_path,
+                item_id=str(payload["itemId"]),
+                orientation=str(payload["orientation"]),
+                boxes=dict(payload.get("boxes", {})),
+                code_column_count=int(payload.get("codeColumnCount", 2)),
+            )
+            self._write_json({"ok": True})
+            return
+        self._write_json(export_yolo_dataset(self.raw_root, self.annotation_path, self.export_root, REPO_ROOT))
 
     def _serve_repo_file(self, relative_path: str) -> None:
         target = (REPO_ROOT / relative_path).resolve()
@@ -130,20 +94,38 @@ class ReviewAppHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765, dataset_root: Path | None = None) -> ThreadingHTTPServer:
-    if dataset_root is not None:
-        ReviewAppHandler.dataset_root = dataset_root
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    raw_root: Path | None = None,
+    annotation_path: Path | None = None,
+    export_root: Path | None = None,
+) -> ThreadingHTTPServer:
+    if raw_root is not None:
+        ReviewAppHandler.raw_root = raw_root
+    if annotation_path is not None:
+        ReviewAppHandler.annotation_path = annotation_path
+    if export_root is not None:
+        ReviewAppHandler.export_root = export_root
     return ThreadingHTTPServer((host, port), ReviewAppHandler)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the color card review app.")
+    parser = argparse.ArgumentParser(description="Run the color card annotation app.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8765, type=int)
-    parser.add_argument("--dataset-root", default=str(DEFAULT_DATASET_ROOT))
+    parser.add_argument("--raw-root", default=str(DEFAULT_RAW_ROOT))
+    parser.add_argument("--annotation-path", default=str(DEFAULT_ANNOTATION_PATH))
+    parser.add_argument("--export-root", default=str(DEFAULT_EXPORT_ROOT))
     args = parser.parse_args(argv)
-    server = serve(args.host, args.port, Path(args.dataset_root))
-    print(f"Review app running at http://{args.host}:{args.port}/")
+    server = serve(
+        args.host,
+        args.port,
+        Path(args.raw_root),
+        Path(args.annotation_path),
+        Path(args.export_root),
+    )
+    print(f"Annotation app running at http://{args.host}:{args.port}/")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
