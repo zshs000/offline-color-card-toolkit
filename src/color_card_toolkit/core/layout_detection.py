@@ -148,18 +148,20 @@ def detect_vertical_layout(
         name_blocks = _recognize_crop(image_rgb, name_detection, ocr_engine, pad_x=0.02, pad_y=0.015)
         ocr_blocks.extend(name_blocks)
 
+    kept_code_detections: list[LayoutDetection] = []
     for detection in code_detections:
         code_blocks = _recognize_crop(image_rgb, detection, ocr_engine, pad_x=0.012, pad_y=0.01)
-        if not code_blocks:
+        if not _has_effective_code_blocks(code_blocks):
             continue
+        kept_code_detections.append(detection)
         ocr_blocks.extend(_normalize_column_blocks(code_blocks, detection))
 
-    if not code_detections:
+    if not kept_code_detections:
         warnings.append("竖版版式模型未检测到数字区域")
 
     return VerticalLayoutResult(
         name_detection=name_detection,
-        code_detections=code_detections,
+        code_detections=kept_code_detections,
         ocr_blocks=ocr_blocks,
         warnings=warnings,
     )
@@ -326,6 +328,21 @@ def _normalize_column_blocks(blocks: list[OcrBlock], detection: LayoutDetection)
             )
         )
     return normalized
+
+
+def _has_effective_code_blocks(blocks: list[OcrBlock]) -> bool:
+    return any(_looks_like_effective_code_text(block.text) for block in blocks)
+
+
+def _looks_like_effective_code_text(text: str) -> bool:
+    normalized = str(text).strip().upper().replace(" ", "")
+    normalized = normalized.translate(str.maketrans({"O": "0", "I": "1", "L": "1", "|": "1"}))
+    normalized = "".join(char for char in normalized if char.isalnum())
+    if not normalized:
+        return False
+    if not any(char.isdigit() for char in normalized):
+        return False
+    return len(normalized) <= 4
 
 
 def _map_block_to_column_box(block: OcrBlock, detection: LayoutDetection) -> Box:
