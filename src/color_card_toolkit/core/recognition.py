@@ -6,6 +6,7 @@ from PIL import Image
 
 from color_card_toolkit.core.color_code_parser import parse_color_codes
 from color_card_toolkit.core.grouping import parse_group_name
+from color_card_toolkit.core.layout_detection import detect_vertical_layout, infer_layout_orientation
 from color_card_toolkit.core.models import ImageRecognitionResult, OcrBlock
 from color_card_toolkit.core.ocr_engine import OcrEngine
 
@@ -14,21 +15,72 @@ GROUP_NAME_TOP_BAND_RATIO = 0.14
 
 def recognize_image(image_path: str | Path, ocr_engine: OcrEngine) -> ImageRecognitionResult:
     path = Path(image_path)
-    blocks = ocr_engine.recognize(path)
-    raw_name = extract_group_name(path, blocks)
+    orientation = infer_layout_orientation(path)
+    if orientation == "vertical":
+        return _recognize_vertical_with_layout_model(path, ocr_engine)
+    return _recognize_horizontal_with_ocr(path, ocr_engine)
+
+
+def _recognize_vertical_with_layout_model(image_path: Path, ocr_engine: OcrEngine) -> ImageRecognitionResult:
+    layout_result = detect_vertical_layout(image_path, ocr_engine)
+    if layout_result is None:
+        return _recognize_horizontal_with_ocr(image_path, ocr_engine)
+
+    if layout_result.ocr_blocks:
+        blocks = layout_result.ocr_blocks
+        raw_name = extract_group_name(image_path, blocks)
+        group = parse_group_name(raw_name)
+        parsed_codes = parse_color_codes(blocks)
+        warnings = list(parsed_codes.warnings)
+        warnings.extend(layout_result.warnings)
+        if not raw_name:
+            warnings.append("左上角组名识别为空，请手动确认")
+        confidence = min((block.confidence for block in blocks), default=0.0)
+        return ImageRecognitionResult(
+            image_path=image_path,
+            raw_name=raw_name,
+            base_name=group.base_name,
+            sequence=group.sequence,
+            color_codes=parsed_codes.codes,
+            explicit_sequence=group.explicit_sequence,
+            missing_codes=parsed_codes.missing_codes,
+            warnings=warnings,
+            confidence=confidence,
+        )
+
+    horizontal_result = _recognize_horizontal_with_ocr(image_path, ocr_engine)
+    warnings = list(horizontal_result.warnings)
+    warnings.extend(layout_result.warnings)
+    return ImageRecognitionResult(
+        image_path=horizontal_result.image_path,
+        raw_name=horizontal_result.raw_name,
+        base_name=horizontal_result.base_name,
+        sequence=horizontal_result.sequence,
+        color_codes=horizontal_result.color_codes,
+        explicit_sequence=horizontal_result.explicit_sequence,
+        participate=horizontal_result.participate,
+        missing_codes=horizontal_result.missing_codes,
+        warnings=warnings,
+        confidence=horizontal_result.confidence,
+    )
+
+
+def _recognize_horizontal_with_ocr(image_path: Path, ocr_engine: OcrEngine) -> ImageRecognitionResult:
+    blocks = ocr_engine.recognize(image_path)
+    raw_name = extract_group_name(image_path, blocks)
     group = parse_group_name(raw_name)
     parsed_codes = parse_color_codes(blocks)
-    strip_blocks = _recognize_color_code_strips(path, ocr_engine)
+    strip_blocks = _recognize_color_code_strips(image_path, ocr_engine)
     if strip_blocks:
         strip_codes = parse_color_codes(strip_blocks)
         if _should_prefer_strip_codes(strip_codes, parsed_codes):
             parsed_codes = strip_codes
     warnings = list(parsed_codes.warnings)
     if not raw_name:
-        warnings.append("左上角组名识别为空，请手动填写")
+        warnings.append("左上角组名识别为空，请手动确认")
     confidence = min((block.confidence for block in blocks), default=0.0)
     return ImageRecognitionResult(
-        image_path=path,
+        image_path=image_path,
         raw_name=raw_name,
         base_name=group.base_name,
         sequence=group.sequence,

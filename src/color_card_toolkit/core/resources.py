@@ -21,3 +21,13 @@ def flat_template_path() -> Path:
 
 def spu_label_template_path() -> Path:
     return resource_path("resources/templates/8144-不干胶贴模板.docx")
+
+
+def vertical_layout_model_path() -> Path | None:
+    path = resource_path("resources/models/vertical_code_area_yolov8n_best.pt")
+    return path if path.exists() else None
+
+
+def horizontal_layout_model_path() -> Path | None:
+    path = resource_path("resources/models/horizontal_code_area_yolov8n_best.pt")
+    return path if path.exists() else None

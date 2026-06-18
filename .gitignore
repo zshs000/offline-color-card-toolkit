@@ -17,6 +17,7 @@ dist-rebuild*/
 *.egg-info/
 
 # Local files
+artifacts/
 .env
 .DS_Store
 Thumbs.db

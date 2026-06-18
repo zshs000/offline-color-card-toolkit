@@ -31,6 +31,13 @@ class RapidOcrEngine:
 
     def recognize(self, image_path: str | Path) -> list[OcrBlock]:
         raw_result = self._call_engine(str(image_path), return_word_box=False)
+        return self._blocks_from_raw_result(raw_result)
+
+    def recognize_image_object(self, image: Image.Image | np.ndarray) -> list[OcrBlock]:
+        raw_result = self._call_engine(image, return_word_box=False)
+        return self._blocks_from_raw_result(raw_result)
+
+    def _blocks_from_raw_result(self, raw_result) -> list[OcrBlock]:
         records = self._extract_records(raw_result)
         blocks: list[OcrBlock] = []
         for record in records:

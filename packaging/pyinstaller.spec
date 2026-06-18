@@ -10,12 +10,16 @@ template_datas = [
     (str(path), "resources/templates")
     for path in (ROOT / "src/color_card_toolkit/resources/templates").glob("*.docx")
 ]
+model_datas = [
+    (str(path), "resources/models")
+    for path in (ROOT / "src/color_card_toolkit/resources/models").glob("*.pt")
+]
 
 a = Analysis(
     [str(ROOT / "src/color_card_toolkit/main.py")],
     pathex=[str(ROOT / "src")],
     binaries=[],
-    datas=template_datas + rapidocr_datas,
+    datas=template_datas + model_datas + rapidocr_datas,
     hiddenimports=["rapidocr_onnxruntime"],
     hookspath=[],
     hooksconfig={},
