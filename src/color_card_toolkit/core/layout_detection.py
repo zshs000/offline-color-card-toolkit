@@ -9,12 +9,12 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from color_card_toolkit.core.models import Box, OcrBlock
-from color_card_toolkit.core.resources import vertical_layout_model_path
+from color_card_toolkit.core.resources import horizontal_layout_model_path, vertical_layout_model_path
 
 LayoutOrientation = Literal["vertical", "horizontal"]
 
 VERTICAL_ASPECT_RATIO_THRESHOLD = 1.2
-_VERTICAL_CLASS_NAMES = {
+_CLASS_NAMES = {
     "name_area": "name_area",
     "code_area": "code_area",
     "0": "name_area",
@@ -62,7 +62,7 @@ class LayoutDetection:
 
 
 @dataclass(frozen=True)
-class VerticalLayoutResult:
+class LayoutDetectionResult:
     name_detection: LayoutDetection | None
     code_detections: list[LayoutDetection]
     ocr_blocks: list[OcrBlock]
@@ -86,32 +86,61 @@ def detect_vertical_layout(
     imgsz: int = 1280,
     conf: float = 0.2,
     iou: float = 0.45,
-) -> VerticalLayoutResult | None:
-    model_path = vertical_layout_model_path()
+) -> LayoutDetectionResult | None:
+    return _detect_layout(
+        image_path,
+        ocr_engine,
+        model_path=vertical_layout_model_path(),
+        orientation="vertical",
+        imgsz=imgsz,
+        conf=conf,
+        iou=iou,
+    )
+
+
+def detect_horizontal_layout(
+    image_path: str | Path,
+    ocr_engine,
+    *,
+    imgsz: int = 1280,
+    conf: float = 0.2,
+    iou: float = 0.45,
+) -> LayoutDetectionResult | None:
+    return _detect_layout(
+        image_path,
+        ocr_engine,
+        model_path=horizontal_layout_model_path(),
+        orientation="horizontal",
+        imgsz=imgsz,
+        conf=conf,
+        iou=iou,
+    )
+
+
+def _detect_layout(
+    image_path: str | Path,
+    ocr_engine,
+    *,
+    model_path: Path | None,
+    orientation: LayoutOrientation,
+    imgsz: int,
+    conf: float,
+    iou: float,
+) -> LayoutDetectionResult | None:
     if model_path is None:
         return None
 
     try:
-        model = _load_vertical_model(model_path)
+        model = _load_model(str(model_path))
     except Exception as exc:
-        return VerticalLayoutResult(
-            name_detection=None,
-            code_detections=[],
-            ocr_blocks=[],
-            warnings=[f"竖版版式模型加载失败: {exc}"],
-        )
+        return LayoutDetectionResult(None, [], [], [f"{orientation} layout model load failed: {exc}"])
 
     path = Path(image_path)
     try:
         with Image.open(path) as image:
             image_rgb = ImageOps.exif_transpose(image).convert("RGB")
     except Exception as exc:
-        return VerticalLayoutResult(
-            name_detection=None,
-            code_detections=[],
-            ocr_blocks=[],
-            warnings=[f"图片加载失败: {exc}"],
-        )
+        return LayoutDetectionResult(None, [], [], [f"image load failed: {exc}"])
 
     try:
         predictions = model.predict(
@@ -123,55 +152,58 @@ def detect_vertical_layout(
             device="cpu",
         )
     except Exception as exc:
-        return VerticalLayoutResult(
-            name_detection=None,
-            code_detections=[],
-            ocr_blocks=[],
-            warnings=[f"竖版版式检测失败: {exc}"],
-        )
+        return LayoutDetectionResult(None, [], [], [f"{orientation} layout detection failed: {exc}"])
 
     detections = _parse_predictions(predictions)
     name_detection = _pick_best_name_detection(detections)
-    code_detections = _prepare_code_detections(detections)
+    if orientation == "vertical":
+        code_detections = _prepare_vertical_code_detections(detections)
+    else:
+        code_detections = _prepare_horizontal_code_detections(detections)
+
     if not name_detection and not code_detections:
-        return VerticalLayoutResult(
-            name_detection=None,
-            code_detections=[],
-            ocr_blocks=[],
-            warnings=["竖版版式模型未检测到有效区域"],
-        )
+        return LayoutDetectionResult(None, [], [], [f"{orientation} layout model found no valid regions"])
 
     ocr_blocks: list[OcrBlock] = []
     warnings: list[str] = []
 
     if name_detection is not None:
-        name_blocks = _recognize_crop(image_rgb, name_detection, ocr_engine, pad_x=0.02, pad_y=0.015)
-        ocr_blocks.extend(name_blocks)
+        ocr_blocks.extend(_recognize_crop(image_rgb, name_detection, ocr_engine, pad_x=0.02, pad_y=0.03))
 
     kept_code_detections: list[LayoutDetection] = []
     for detection in code_detections:
-        code_blocks = _recognize_crop(image_rgb, detection, ocr_engine, pad_x=0.012, pad_y=0.01)
-        if not _has_effective_code_blocks(code_blocks):
-            continue
-        kept_code_detections.append(detection)
-        ocr_blocks.extend(_normalize_column_blocks(code_blocks, detection))
+        if orientation == "vertical":
+            code_blocks = _recognize_crop(image_rgb, detection, ocr_engine, pad_x=0.012, pad_y=0.01)
+            if not _has_effective_code_blocks(code_blocks):
+                continue
+            kept_code_detections.append(detection)
+            ocr_blocks.extend(_normalize_vertical_column_blocks(code_blocks, detection))
+        else:
+            expanded_detection = _expand_horizontal_code_detection(detection, image_rgb.width)
+            code_blocks = _recognize_crop(
+                image_rgb,
+                expanded_detection,
+                ocr_engine,
+                pad_x=0.0,
+                pad_y=0.01,
+                input_mode="rgb_array",
+            )
+            if not _has_effective_code_blocks(code_blocks):
+                continue
+            kept_code_detections.append(expanded_detection)
+            ocr_blocks.extend(code_blocks)
 
     if not kept_code_detections:
-        warnings.append("竖版版式模型未检测到数字区域")
+        warnings.append(f"{orientation} layout model found no code region with OCR text")
 
-    return VerticalLayoutResult(
-        name_detection=name_detection,
-        code_detections=kept_code_detections,
-        ocr_blocks=ocr_blocks,
-        warnings=warnings,
-    )
+    return LayoutDetectionResult(name_detection, kept_code_detections, ocr_blocks, warnings)
 
 
-@lru_cache(maxsize=1)
-def _load_vertical_model(model_path: Path):
+@lru_cache(maxsize=2)
+def _load_model(model_path: str):
     from ultralytics import YOLO
 
-    return YOLO(str(model_path))
+    return YOLO(model_path)
 
 
 def _parse_predictions(predictions) -> list[LayoutDetection]:
@@ -185,22 +217,18 @@ def _parse_predictions(predictions) -> list[LayoutDetection]:
     if boxes is None:
         return detections
 
-    xyxy = getattr(boxes, "xyxy", [])
-    cls = getattr(boxes, "cls", [])
-    conf = getattr(boxes, "conf", [])
-
-    for coords, class_id, score in zip(xyxy, cls, conf):
+    for coords, class_id, score in zip(getattr(boxes, "xyxy", []), getattr(boxes, "cls", []), getattr(boxes, "conf", [])):
         x1, y1, x2, y2 = [float(value) for value in coords.tolist()]
-        label_key = str(int(class_id.item() if hasattr(class_id, "item") else class_id))
-        label = _VERTICAL_CLASS_NAMES.get(label_key)
+        class_index = int(class_id.item() if hasattr(class_id, "item") else class_id)
+        label = _CLASS_NAMES.get(str(class_index))
         if label is None and names:
-            raw_name = names.get(int(label_key)) if isinstance(names, dict) else None
+            raw_name = names.get(class_index) if isinstance(names, dict) else None
             if raw_name is None:
                 try:
-                    raw_name = names[int(label_key)]
+                    raw_name = names[class_index]
                 except Exception:
                     raw_name = None
-            label = _VERTICAL_CLASS_NAMES.get(str(raw_name), str(raw_name) if raw_name else "")
+            label = _CLASS_NAMES.get(str(raw_name), str(raw_name) if raw_name else "")
         if label not in {"name_area", "code_area"}:
             continue
         detections.append(
@@ -220,12 +248,26 @@ def _pick_best_name_detection(detections: list[LayoutDetection]) -> LayoutDetect
     return max(names, key=lambda item: (item.confidence, -item.center_y))
 
 
-def _prepare_code_detections(detections: list[LayoutDetection]) -> list[LayoutDetection]:
+def _prepare_vertical_code_detections(detections: list[LayoutDetection]) -> list[LayoutDetection]:
     codes = [item for item in detections if item.label == "code_area"]
     if not codes:
         return []
-    deduped = _dedupe_code_detections(codes)
-    return sorted(deduped, key=lambda item: item.center_x)
+    return sorted(_dedupe_code_detections(codes), key=lambda item: item.center_x)
+
+
+def _prepare_horizontal_code_detections(detections: list[LayoutDetection]) -> list[LayoutDetection]:
+    codes = [item for item in detections if item.label == "code_area"]
+    if not codes:
+        return []
+    return sorted(_dedupe_code_detections(codes), key=lambda item: item.confidence, reverse=True)[:1]
+
+
+def _expand_horizontal_code_detection(detection: LayoutDetection, image_width: int) -> LayoutDetection:
+    return LayoutDetection(
+        label=detection.label,
+        confidence=detection.confidence,
+        box=((0.0, detection.min_y), (float(image_width), detection.min_y), (float(image_width), detection.max_y), (0.0, detection.max_y)),
+    )
 
 
 def _dedupe_code_detections(detections: list[LayoutDetection]) -> list[LayoutDetection]:
@@ -250,31 +292,28 @@ def _is_duplicate_code_box(first: LayoutDetection, second: LayoutDetection) -> b
 
 
 def _intersection_over_union(first: Box, second: Box) -> float:
-    first_x1 = min(point[0] for point in first)
-    first_y1 = min(point[1] for point in first)
-    first_x2 = max(point[0] for point in first)
-    first_y2 = max(point[1] for point in first)
-    second_x1 = min(point[0] for point in second)
-    second_y1 = min(point[1] for point in second)
-    second_x2 = max(point[0] for point in second)
-    second_y2 = max(point[1] for point in second)
-
+    first_x1, first_y1, first_x2, first_y2 = _box_xyxy(first)
+    second_x1, second_y1, second_x2, second_y2 = _box_xyxy(second)
     inter_x1 = max(first_x1, second_x1)
     inter_y1 = max(first_y1, second_y1)
     inter_x2 = min(first_x2, second_x2)
     inter_y2 = min(first_y2, second_y2)
-    inter_w = max(0.0, inter_x2 - inter_x1)
-    inter_h = max(0.0, inter_y2 - inter_y1)
-    intersection = inter_w * inter_h
+    intersection = max(0.0, inter_x2 - inter_x1) * max(0.0, inter_y2 - inter_y1)
     if intersection <= 0:
         return 0.0
-
     first_area = max(0.0, first_x2 - first_x1) * max(0.0, first_y2 - first_y1)
     second_area = max(0.0, second_x2 - second_x1) * max(0.0, second_y2 - second_y1)
     union = first_area + second_area - intersection
-    if union <= 0:
-        return 0.0
-    return intersection / union
+    return intersection / union if union > 0 else 0.0
+
+
+def _box_xyxy(box: Box) -> tuple[float, float, float, float]:
+    return (
+        min(point[0] for point in box),
+        min(point[1] for point in box),
+        max(point[0] for point in box),
+        max(point[1] for point in box),
+    )
 
 
 def _recognize_crop(
@@ -284,18 +323,23 @@ def _recognize_crop(
     *,
     pad_x: float,
     pad_y: float,
+    input_mode: Literal["pil", "rgb_array"] = "pil",
 ) -> list[OcrBlock]:
-    crop = _crop_with_padding(image, detection, pad_x=pad_x, pad_y=pad_y)
-    if crop is None:
+    crop_result = _crop_with_padding(image, detection, pad_x=pad_x, pad_y=pad_y)
+    if crop_result is None:
         return []
+    crop, offset = crop_result
 
     recognizer = getattr(ocr_engine, "recognize_image_object", None)
     try:
         if callable(recognizer):
-            return list(recognizer(crop))
-        return list(ocr_engine.recognize(crop))
+            ocr_input = np.array(crop) if input_mode == "rgb_array" else crop
+            blocks = list(recognizer(ocr_input))
+        else:
+            blocks = list(ocr_engine.recognize(crop))
     except Exception:
         return []
+    return [_offset_block(block, offset) for block in blocks]
 
 
 def _crop_with_padding(
@@ -304,7 +348,7 @@ def _crop_with_padding(
     *,
     pad_x: float,
     pad_y: float,
-) -> Image.Image | None:
+) -> tuple[Image.Image, tuple[float, float]] | None:
     width, height = image.size
     x_pad = int(width * pad_x)
     y_pad = int(height * pad_y)
@@ -314,20 +358,31 @@ def _crop_with_padding(
     y2 = min(height, int(detection.max_y) + y_pad)
     if x2 <= x1 or y2 <= y1:
         return None
-    return image.crop((x1, y1, x2, y2))
+    return image.crop((x1, y1, x2, y2)), (float(x1), float(y1))
 
 
-def _normalize_column_blocks(blocks: list[OcrBlock], detection: LayoutDetection) -> list[OcrBlock]:
+def _normalize_vertical_column_blocks(blocks: list[OcrBlock], detection: LayoutDetection) -> list[OcrBlock]:
     normalized: list[OcrBlock] = []
     for block in blocks:
         normalized.append(
             OcrBlock(
                 text=block.text,
                 confidence=block.confidence,
-                box=_map_block_to_column_box(block, detection),
+                box=_map_block_to_vertical_column_box(block, detection),
             )
         )
     return normalized
+
+
+def _map_block_to_vertical_column_box(block: OcrBlock, detection: LayoutDetection) -> Box:
+    min_x = detection.min_x
+    max_x = detection.max_x
+    width = max(max_x - min_x, 1.0)
+    center_x = (min_x + max_x) / 2
+    block_width = min(max(block.width, 1.0), width * 0.8)
+    x1 = max(min_x, center_x - block_width / 2)
+    x2 = min(max_x, center_x + block_width / 2)
+    return ((x1, block.min_y), (x2, block.min_y), (x2, block.max_y), (x1, block.max_y))
 
 
 def _has_effective_code_blocks(blocks: list[OcrBlock]) -> bool:
@@ -342,17 +397,13 @@ def _looks_like_effective_code_text(text: str) -> bool:
         return False
     if not any(char.isdigit() for char in normalized):
         return False
-    return len(normalized) <= 4
+    return len(normalized) <= 80
 
 
-def _map_block_to_column_box(block: OcrBlock, detection: LayoutDetection) -> Box:
-    min_x = detection.min_x
-    max_x = detection.max_x
-    width = max(max_x - min_x, 1.0)
-    center_x = (min_x + max_x) / 2
-    block_min_y = block.min_y + detection.min_y
-    block_max_y = block.max_y + detection.min_y
-    block_width = min(max(block.width, 1.0), width * 0.8)
-    x1 = max(min_x, center_x - block_width / 2)
-    x2 = min(max_x, center_x + block_width / 2)
-    return ((x1, block_min_y), (x2, block_min_y), (x2, block_max_y), (x1, block_max_y))
+def _offset_block(block: OcrBlock, offset: tuple[float, float]) -> OcrBlock:
+    offset_x, offset_y = offset
+    return OcrBlock(
+        text=block.text,
+        confidence=block.confidence,
+        box=tuple((offset_x + point[0], offset_y + point[1]) for point in block.box),  # type: ignore[return-value]
+    )

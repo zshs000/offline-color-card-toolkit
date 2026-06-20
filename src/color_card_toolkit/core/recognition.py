@@ -6,7 +6,12 @@ from PIL import Image
 
 from color_card_toolkit.core.color_code_parser import parse_color_codes
 from color_card_toolkit.core.grouping import parse_group_name
-from color_card_toolkit.core.layout_detection import detect_vertical_layout, infer_layout_orientation
+from color_card_toolkit.core.layout_detection import (
+    LayoutDetectionResult,
+    detect_horizontal_layout,
+    detect_vertical_layout,
+    infer_layout_orientation,
+)
 from color_card_toolkit.core.models import ImageRecognitionResult, OcrBlock
 from color_card_toolkit.core.ocr_engine import OcrEngine
 
@@ -18,50 +23,73 @@ def recognize_image(image_path: str | Path, ocr_engine: OcrEngine) -> ImageRecog
     orientation = infer_layout_orientation(path)
     if orientation == "vertical":
         return _recognize_vertical_with_layout_model(path, ocr_engine)
-    return _recognize_horizontal_with_ocr(path, ocr_engine)
+    return _recognize_horizontal_with_layout_model(path, ocr_engine)
 
 
 def _recognize_vertical_with_layout_model(image_path: Path, ocr_engine: OcrEngine) -> ImageRecognitionResult:
-    layout_result = detect_vertical_layout(image_path, ocr_engine)
+    return _recognize_with_layout_result(
+        image_path,
+        detect_vertical_layout(image_path, ocr_engine),
+        missing_model_warning="竖版 YOLO 模型不可用，请检查内置模型文件",
+    )
+
+
+def _recognize_horizontal_with_layout_model(image_path: Path, ocr_engine: OcrEngine) -> ImageRecognitionResult:
+    return _recognize_with_layout_result(
+        image_path,
+        detect_horizontal_layout(image_path, ocr_engine),
+        missing_model_warning="横版 YOLO 模型不可用，请检查内置模型文件",
+    )
+
+
+def _recognize_with_layout_result(
+    image_path: Path,
+    layout_result: LayoutDetectionResult | None,
+    *,
+    missing_model_warning: str,
+) -> ImageRecognitionResult:
     if layout_result is None:
-        return _recognize_horizontal_with_ocr(image_path, ocr_engine)
+        return _manual_result_for_image(image_path, missing_model_warning)
 
-    if layout_result.ocr_blocks:
-        blocks = layout_result.ocr_blocks
-        raw_name = extract_group_name(image_path, blocks)
-        group = parse_group_name(raw_name)
-        parsed_codes = parse_color_codes(blocks)
-        warnings = list(parsed_codes.warnings)
-        warnings.extend(layout_result.warnings)
-        if not raw_name:
-            warnings.append("左上角组名识别为空，请手动确认")
-        confidence = min((block.confidence for block in blocks), default=0.0)
-        return ImageRecognitionResult(
-            image_path=image_path,
-            raw_name=raw_name,
-            base_name=group.base_name,
-            sequence=group.sequence,
-            color_codes=parsed_codes.codes,
-            explicit_sequence=group.explicit_sequence,
-            missing_codes=parsed_codes.missing_codes,
-            warnings=warnings,
-            confidence=confidence,
-        )
+    blocks = layout_result.ocr_blocks
+    if not blocks:
+        warnings = list(layout_result.warnings)
+        warnings.append("YOLO 已运行，但没有得到可用 OCR 文本，请手动确认")
+        return _manual_result_for_image(image_path, "; ".join(warnings))
 
-    horizontal_result = _recognize_horizontal_with_ocr(image_path, ocr_engine)
-    warnings = list(horizontal_result.warnings)
+    raw_name = extract_group_name(image_path, blocks)
+    group = parse_group_name(raw_name)
+    parsed_codes = parse_color_codes(blocks)
+    warnings = list(parsed_codes.warnings)
     warnings.extend(layout_result.warnings)
+    if not raw_name:
+        warnings.append("左上角组名识别为空，请手动确认")
+    confidence = min((block.confidence for block in blocks), default=0.0)
     return ImageRecognitionResult(
-        image_path=horizontal_result.image_path,
-        raw_name=horizontal_result.raw_name,
-        base_name=horizontal_result.base_name,
-        sequence=horizontal_result.sequence,
-        color_codes=horizontal_result.color_codes,
-        explicit_sequence=horizontal_result.explicit_sequence,
-        participate=horizontal_result.participate,
-        missing_codes=horizontal_result.missing_codes,
+        image_path=image_path,
+        raw_name=raw_name,
+        base_name=group.base_name,
+        sequence=group.sequence,
+        color_codes=parsed_codes.codes,
+        explicit_sequence=group.explicit_sequence,
+        missing_codes=parsed_codes.missing_codes,
         warnings=warnings,
-        confidence=horizontal_result.confidence,
+        confidence=confidence,
+    )
+
+
+def _manual_result_for_image(image_path: Path, warning: str) -> ImageRecognitionResult:
+    fallback_name = image_path.stem.strip()
+    group = parse_group_name(fallback_name)
+    return ImageRecognitionResult(
+        image_path=image_path,
+        raw_name=fallback_name,
+        base_name=group.base_name,
+        sequence=group.sequence,
+        color_codes=[],
+        explicit_sequence=group.explicit_sequence,
+        warnings=[warning],
+        confidence=0.0,
     )
 
 
