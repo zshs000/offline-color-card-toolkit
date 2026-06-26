@@ -16,9 +16,20 @@ dist/
 dist-rebuild*/
 *.egg-info/
 
-# Local files
+# Local data and training outputs
+datasets/
+runs/
+
+# Local scratch files
 artifacts/
 .env
+.codex_patch.diff
+task_plan.md
+findings.md
+progress.md
+train_resume.log
+tmp_*.jpg
+yolov*.pt
 .DS_Store
 Thumbs.db
 tests/测试图片/
