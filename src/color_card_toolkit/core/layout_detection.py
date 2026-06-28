@@ -73,6 +73,7 @@ def infer_layout_orientation(image_path: str | Path) -> LayoutOrientation:
     path = Path(image_path)
     try:
         with Image.open(path) as image:
+            image = ImageOps.exif_transpose(image)
             ratio = image.width / max(image.height, 1)
     except Exception:
         return "horizontal"
