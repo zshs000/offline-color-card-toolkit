@@ -29,7 +29,7 @@ findings.md
 progress.md
 train_resume.log
 tmp_*.jpg
-yolov*.pt
+/yolov*.pt
 .DS_Store
 Thumbs.db
 tests/测试图片/

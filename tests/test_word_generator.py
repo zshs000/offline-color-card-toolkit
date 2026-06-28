@@ -8,13 +8,14 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from color_card_toolkit.core.models import GroupedColorCard
+from color_card_toolkit.core.resources import flat_template_path
 from color_card_toolkit.core.word_generator import CODE_ROW_INDICES, generate_flat_template_docx
 
 WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 
 def test_word_generator_fills_header_and_24_code_slots(tmp_path: Path) -> None:
-    template = Path("docs/转平贴底纸模板.docx")
+    template = flat_template_path()
     output = tmp_path / "output.docx"
     codes = [str(number).zfill(2) for number in range(1, 27)]
 
@@ -41,7 +42,7 @@ def test_word_generator_fills_header_and_24_code_slots(tmp_path: Path) -> None:
 
 
 def test_word_generator_uses_table_page_breaks_without_blank_break_paragraphs(tmp_path: Path) -> None:
-    template = Path("docs/转平贴底纸模板.docx")
+    template = flat_template_path()
     output = tmp_path / "output.docx"
 
     generate_flat_template_docx([GroupedColorCard("PU88", ["01", "02"] * 13)], output, template)
