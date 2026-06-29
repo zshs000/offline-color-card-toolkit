@@ -199,6 +199,17 @@ def test_horizontal_parser_does_not_complete_missing_code_without_layout_gap() -
     assert parsed.missing_codes == ["06"]
 
 
+def test_horizontal_parser_repairs_small_duplicate_rollback_ocr_error() -> None:
+    blocks = [block(str(number), 100 + index * 100, 250) for index, number in enumerate([2, 3, 4, 5, 6, 7, 8])]
+    blocks.append(block("6", 100 + 7 * 100, 250))
+    blocks.extend(block(str(number), 100 + index * 100, 250) for index, number in enumerate(range(10, 15), start=8))
+
+    parsed = parse_color_codes(blocks)
+
+    assert parsed.codes == [str(number) for number in range(2, 15)]
+    assert parsed.missing_codes == []
+
+
 def test_horizontal_parser_does_not_repair_small_number_swap_as_ocr_outlier() -> None:
     blocks = [block(str(number).zfill(2), 100 + index * 100, 250) for index, number in enumerate(range(1, 11))]
     blocks.extend(

@@ -189,6 +189,7 @@ def _detect_layout(
                 pad_y=0.01,
                 input_mode="rgb_array",
             )
+            code_blocks = _split_horizontal_merged_code_blocks(image_rgb, expanded_detection, code_blocks)
             if not _has_effective_code_blocks(code_blocks):
                 continue
             kept_code_detections.append(expanded_detection)
@@ -341,6 +342,269 @@ def _recognize_crop(
     except Exception:
         return []
     return [_offset_block(block, offset) for block in blocks]
+
+
+def _split_horizontal_merged_code_blocks(
+    image: Image.Image,
+    detection: LayoutDetection,
+    blocks: list[OcrBlock],
+) -> list[OcrBlock]:
+    crop_result = _crop_with_padding(image, detection, pad_x=0.0, pad_y=0.01)
+    if crop_result is None:
+        return blocks
+
+    crop, offset = crop_result
+    units = _segment_horizontal_code_units(crop)
+    if len(units) < 6:
+        return blocks
+
+    refined: list[OcrBlock] = []
+    changed = False
+    for block in blocks:
+        digits = "".join(char for char in str(block.text).strip() if char.isdigit())
+        if digits != str(block.text).strip() or len(digits) < 2:
+            refined.append(block)
+            continue
+
+        relative_x1 = block.min_x - offset[0]
+        relative_x2 = block.max_x - offset[0]
+        covered_units = _units_covered_by_block(units, relative_x1, relative_x2)
+        if len(covered_units) <= 1:
+            refined.append(block)
+            continue
+
+        parts = _split_numeric_text_by_unit_count(digits, len(covered_units))
+        split_units = covered_units
+        if not parts:
+            for candidate_count in (len(covered_units) + 1, len(covered_units) - 1):
+                parts = _split_numeric_text_by_unit_count(digits, candidate_count)
+                if parts:
+                    split_units = _interpolate_horizontal_units(relative_x1, relative_x2, candidate_count)
+                    break
+        if not parts:
+            refined.append(block)
+            continue
+
+        changed = True
+        for text, unit in zip(parts, split_units):
+            refined.append(
+                OcrBlock(
+                    text=text,
+                    confidence=block.confidence,
+                    box=_offset_unit_box(unit, offset, y1=block.min_y, y2=block.max_y),
+                )
+            )
+
+    if not changed:
+        return blocks
+    return sorted(refined, key=lambda item: (item.center_y, item.center_x))
+
+
+def _segment_horizontal_code_units(crop: Image.Image) -> list[tuple[float, float, float, float]]:
+    try:
+        import cv2
+    except ImportError:
+        return []
+
+    gray = np.array(crop.convert("L"))
+    if gray.size == 0:
+        return []
+
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+
+    height, width = mask.shape
+    components: list[tuple[int, int, int, int, int]] = []
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, 8)
+    for index in range(1, count):
+        x, y, component_width, component_height, area = [int(value) for value in stats[index]]
+        if area < max(12, int(width * height * 0.00005)):
+            continue
+        if component_height < max(8, int(height * 0.15)):
+            continue
+        if component_width < 2:
+            continue
+        if x <= 3 or x + component_width >= width - 3:
+            continue
+        if component_height > height * 0.95 and component_width > width * 0.8:
+            continue
+        components.append((x, y, x + component_width, y + component_height, area))
+
+    if len(components) < 6:
+        return []
+
+    components.sort(key=lambda item: item[0])
+    gaps = [
+        components[index + 1][0] - components[index][2]
+        for index in range(len(components) - 1)
+        if components[index + 1][0] > components[index][2]
+    ]
+    gap_threshold = _horizontal_unit_gap_threshold(gaps, components)
+
+    groups: list[list[tuple[int, int, int, int, int]]] = []
+    current = [components[0]]
+    for previous, component in zip(components, components[1:]):
+        gap = component[0] - previous[2]
+        if gap <= gap_threshold:
+            current.append(component)
+        else:
+            groups.append(current)
+            current = [component]
+    groups.append(current)
+
+    units: list[tuple[float, float, float, float]] = []
+    for group in groups:
+        x1 = min(item[0] for item in group)
+        y1 = min(item[1] for item in group)
+        x2 = max(item[2] for item in group)
+        y2 = max(item[3] for item in group)
+        if x2 - x1 < 4 or y2 - y1 < max(8, height * 0.12):
+            continue
+        units.append((float(x1), float(y1), float(x2), float(y2)))
+
+    if len(units) < 6:
+        return []
+    units = _drop_horizontal_unit_width_outliers(units)
+    if len(units) < 6:
+        return []
+    return units
+
+
+def _horizontal_unit_gap_threshold(
+    gaps: list[int],
+    components: list[tuple[int, int, int, int, int]],
+) -> float:
+    positive_gaps = sorted(gap for gap in gaps if gap > 0)
+    if len(positive_gaps) >= 4:
+        largest_jump = 0
+        threshold = float(np.median(positive_gaps))
+        for previous, current in zip(positive_gaps, positive_gaps[1:]):
+            jump = current - previous
+            if jump > largest_jump:
+                largest_jump = jump
+                threshold = (previous + current) / 2
+        return max(8.0, min(threshold, 45.0))
+
+    widths = [item[2] - item[0] for item in components]
+    return max(8.0, float(np.median(widths)) * 0.55)
+
+
+def _drop_horizontal_unit_width_outliers(
+    units: list[tuple[float, float, float, float]],
+) -> list[tuple[float, float, float, float]]:
+    widths = [unit[2] - unit[0] for unit in units]
+    normal_widths = [width for width in widths if 4 <= width <= 160]
+    if not normal_widths:
+        return units
+    median_width = float(np.median(normal_widths))
+    max_width = max(120.0, median_width * 3.2)
+    return [unit for unit in units if unit[2] - unit[0] <= max_width]
+
+
+def _units_covered_by_block(
+    units: list[tuple[float, float, float, float]],
+    x1: float,
+    x2: float,
+) -> list[tuple[float, float, float, float]]:
+    tolerance = max(6.0, (x2 - x1) * 0.02)
+    covered = []
+    for unit in units:
+        center_x = (unit[0] + unit[2]) / 2
+        if x1 - tolerance <= center_x <= x2 + tolerance:
+            covered.append(unit)
+    return covered
+
+
+def _split_numeric_text_by_unit_count(text: str, unit_count: int) -> list[str]:
+    if unit_count <= 1:
+        return []
+    if len(text) == unit_count:
+        parts = list(text)
+        if _looks_like_incrementing_parts(parts):
+            return parts
+
+    for width in (2, 3):
+        if len(text) % width != 0 or len(text) // width != unit_count:
+            continue
+        parts = [text[index : index + width] for index in range(0, len(text), width)]
+        if _looks_like_incrementing_parts(parts):
+            return parts
+
+    return _split_incrementing_digits(text, unit_count)
+
+
+def _interpolate_horizontal_units(
+    x1: float,
+    x2: float,
+    unit_count: int,
+) -> list[tuple[float, float, float, float]]:
+    if unit_count <= 0 or x2 <= x1:
+        return []
+    width = (x2 - x1) / unit_count
+    return [
+        (x1 + index * width, 0.0, x1 + (index + 1) * width, 1.0)
+        for index in range(unit_count)
+    ]
+
+
+def _split_incrementing_digits(text: str, unit_count: int) -> list[str]:
+    for start in range(1, 100):
+        parts = _consume_incrementing_digits(text, start, unit_count)
+        if parts and _looks_like_incrementing_parts(parts):
+            return parts
+    return []
+
+
+def _consume_incrementing_digits(text: str, start: int, unit_count: int) -> list[str]:
+    remaining = text
+    expected = start
+    parts: list[str] = []
+    while remaining and len(parts) < unit_count:
+        matched = False
+        for skipped in range(0, 13):
+            candidate = str(expected + skipped)
+            if remaining.startswith(candidate):
+                parts.append(candidate)
+                remaining = remaining[len(candidate) :]
+                expected = int(candidate) + 1
+                matched = True
+                break
+        if not matched:
+            return []
+
+    if remaining or len(parts) != unit_count:
+        return []
+    return parts
+
+
+def _looks_like_incrementing_parts(parts: list[str]) -> bool:
+    if len(parts) < 2 or not all(part.isdigit() for part in parts):
+        return False
+    numbers = [int(part) for part in parts]
+    if any(current <= previous for previous, current in zip(numbers, numbers[1:])):
+        return False
+    span = numbers[-1] - numbers[0] + 1
+    return span <= len(numbers) + max(4, int(len(numbers) * 0.35))
+
+
+def _offset_unit_box(
+    unit: tuple[float, float, float, float],
+    offset: tuple[float, float],
+    *,
+    y1: float,
+    y2: float,
+) -> Box:
+    offset_x, offset_y = offset
+    _unit_x1, _unit_y1, _unit_x2, _unit_y2 = unit
+    x1 = offset_x + _unit_x1
+    x2 = offset_x + _unit_x2
+    return (
+        (x1, y1),
+        (x2, y1),
+        (x2, y2),
+        (x1, y2),
+    )
 
 
 def _crop_with_padding(

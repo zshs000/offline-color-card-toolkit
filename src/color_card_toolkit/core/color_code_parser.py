@@ -343,12 +343,25 @@ def _repair_single_numeric_sequence_outliers(codes: list[str]) -> list[str]:
         expected_number = previous_number + 1
         if next_number != expected_number + 1 or current_number == expected_number:
             continue
-        if abs(current_number - expected_number) < 10:
+        if abs(current_number - expected_number) < 10 and not _looks_like_duplicate_or_rollback(
+            [repaired[index] for index in numeric_positions[:position_index]],
+            current_number,
+            previous_number,
+        ):
             continue
         if len(current_code) > 3:
             continue
         repaired[current_index] = _format_expected_number(expected_number, _sequence_width(previous_code, next_code))
     return repaired
+
+
+def _looks_like_duplicate_or_rollback(
+    previous_codes: list[str],
+    current_number: int,
+    previous_number: int,
+) -> bool:
+    previous_numbers = [int(code) for code in previous_codes if code.isdigit()]
+    return current_number <= previous_number or current_number in previous_numbers
 
 
 def _sequence_width(previous_code: str, next_code: str) -> int:
