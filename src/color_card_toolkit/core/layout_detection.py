@@ -70,6 +70,15 @@ class LayoutDetectionResult:
     warnings: list[str]
 
 
+@dataclass(frozen=True)
+class HorizontalApiCrops:
+    name_image: Image.Image
+    code_image: Image.Image
+    name_detection: LayoutDetection
+    code_detection: LayoutDetection
+    confidence: float
+
+
 def infer_layout_orientation(image_path: str | Path) -> LayoutOrientation:
     path = Path(image_path)
     try:
@@ -116,6 +125,45 @@ def detect_horizontal_layout(
         imgsz=imgsz,
         conf=conf,
         iou=iou,
+    )
+
+
+def crop_horizontal_api_regions(
+    image_path: str | Path,
+    *,
+    conf: float = 0.1,
+    iou: float = 0.45,
+    imgsz: int = 1280,
+) -> HorizontalApiCrops | None:
+    model_path = horizontal_layout_model_path()
+    if model_path is None:
+        return None
+
+    try:
+        model = _load_model(str(model_path))
+        with Image.open(image_path) as image:
+            image_rgb = ImageOps.exif_transpose(image).convert("RGB")
+        detections = _predict_layout_detections(model, image_rgb, imgsz=imgsz, conf=conf, iou=iou)
+    except Exception:
+        return None
+
+    name_detection = _pick_best_name_detection(detections)
+    code_detections = _prepare_horizontal_code_detections(detections)
+    if name_detection is None or not code_detections:
+        return None
+
+    code_detection = _expand_horizontal_code_detection(code_detections[0], image_rgb.width)
+    name_crop = _crop_with_padding(image_rgb, name_detection, pad_x=0.02, pad_y=0.03)
+    code_crop = _crop_with_padding(image_rgb, code_detection, pad_x=0.0, pad_y=0.0)
+    if name_crop is None or code_crop is None:
+        return None
+
+    return HorizontalApiCrops(
+        name_image=name_crop[0],
+        code_image=code_crop[0],
+        name_detection=name_detection,
+        code_detection=code_detection,
+        confidence=min(name_detection.confidence, code_detections[0].confidence),
     )
 
 

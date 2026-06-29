@@ -75,6 +75,8 @@ class ImageRecognitionResult:
     missing_codes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     confidence: float = 0.0
+    recognition_source: str = ""
+    api_retry_count: int = 0
 
     @property
     def display_missing_codes(self) -> str:
@@ -115,4 +117,3 @@ def normalize_code_list(codes: Sequence[str] | str) -> list[str]:
     else:
         raw_parts = list(codes)
     return [part.strip() for part in raw_parts if str(part).strip()]
-

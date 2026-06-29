@@ -5,6 +5,10 @@ from pathlib import Path
 from PIL import Image
 
 from color_card_toolkit.core.color_code_parser import parse_color_codes
+from color_card_toolkit.core.cloud_recognition import (
+    CloudVisionConfig,
+    recognize_horizontal_image_with_cloud,
+)
 from color_card_toolkit.core.grouping import parse_group_name
 from color_card_toolkit.core.layout_detection import (
     LayoutDetectionResult,
@@ -18,12 +22,28 @@ from color_card_toolkit.core.ocr_engine import OcrEngine
 GROUP_NAME_TOP_BAND_RATIO = 0.14
 
 
-def recognize_image(image_path: str | Path, ocr_engine: OcrEngine) -> ImageRecognitionResult:
+def recognize_image(
+    image_path: str | Path,
+    ocr_engine: OcrEngine,
+    *,
+    cloud_config: CloudVisionConfig | None = None,
+) -> ImageRecognitionResult:
     path = Path(image_path)
     orientation = infer_layout_orientation(path)
     if orientation == "vertical":
         return _recognize_vertical_with_layout_model(path, ocr_engine)
+    if cloud_config is not None and cloud_config.enabled:
+        return _recognize_horizontal_with_cloud(path, cloud_config)
     return _recognize_horizontal_with_layout_model(path, ocr_engine)
+
+
+def _recognize_horizontal_with_cloud(image_path: Path, cloud_config: CloudVisionConfig) -> ImageRecognitionResult:
+    try:
+        return recognize_horizontal_image_with_cloud(image_path, cloud_config)
+    except Exception as exc:
+        result = _manual_result_for_image(image_path, f"横版云端识别失败：{exc}")
+        result.recognition_source = "cloud_failed"
+        return result
 
 
 def _recognize_vertical_with_layout_model(image_path: Path, ocr_engine: OcrEngine) -> ImageRecognitionResult:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from color_card_toolkit.core.cloud_recognition import CloudVisionConfig
 from color_card_toolkit.core.grouping import group_recognition_results, parse_group_name
 from color_card_toolkit.core.models import ImageRecognitionResult, normalize_code_list
 from color_card_toolkit.core.ocr_engine import RapidOcrEngine
@@ -79,6 +81,21 @@ class StackToFlatPage(QWidget):
         output_layout.addWidget(self.output_folder_edit, 1, 1)
         output_layout.addWidget(browse_output, 1, 2)
         layout.addWidget(output_box)
+
+        cloud_box = QGroupBox("横版云端识别")
+        cloud_layout = QGridLayout(cloud_box)
+        self.cloud_base_url_edit = QLineEdit(os.environ.get("COLOR_CARD_CLOUD_BASE_URL", ""))
+        self.cloud_api_key_edit = QLineEdit(os.environ.get("COLOR_CARD_CLOUD_API_KEY", ""))
+        self.cloud_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.cloud_model_edit = QLineEdit(os.environ.get("COLOR_CARD_CLOUD_MODEL", ""))
+        cloud_layout.addWidget(QLabel("Base URL:"), 0, 0)
+        cloud_layout.addWidget(self.cloud_base_url_edit, 0, 1)
+        cloud_layout.addWidget(QLabel("API Key:"), 1, 0)
+        cloud_layout.addWidget(self.cloud_api_key_edit, 1, 1)
+        cloud_layout.addWidget(QLabel("Model:"), 2, 0)
+        cloud_layout.addWidget(self.cloud_model_edit, 2, 1)
+        cloud_layout.addWidget(QLabel("仅横版使用云端识别；竖版仍走本地识别。三项都填写后启用。"), 3, 0, 1, 2)
+        layout.addWidget(cloud_box)
 
         image_box = QGroupBox("图片选择")
         image_layout = QHBoxLayout(image_box)
@@ -139,6 +156,10 @@ class StackToFlatPage(QWidget):
             return
         self._results = []
         self._set_processing(True)
+        cloud_config = self._cloud_config_from_ui()
+        if cloud_config is False:
+            self._set_processing(False)
+            return
 
         engine_holder = threading.local()
 
@@ -149,6 +170,8 @@ class StackToFlatPage(QWidget):
                         intra_op_num_threads=1,
                         inter_op_num_threads=1,
                     )
+                if cloud_config:
+                    return recognize_image(path, engine_holder.engine, cloud_config=cloud_config)
                 return recognize_image(path, engine_holder.engine)
             except Exception as exc:
                 return _manual_result_for_image(path, f"OCR 识别失败：{exc}。已使用文件名作为组名，请手动修正。")
@@ -175,6 +198,9 @@ class StackToFlatPage(QWidget):
         self._populate_table(self._results)
         self._set_processing(False)
         self.image_summary.setText(f"已识别 {len(self._results)} 张图片")
+        cloud_summary = _cloud_recognition_summary(self._results)
+        if cloud_summary:
+            self.image_summary.setText(f"{self.image_summary.text()}; {cloud_summary}")
         if failed_count:
             QMessageBox.warning(
                 self,
@@ -187,10 +213,24 @@ class StackToFlatPage(QWidget):
         self._set_processing(False)
         QMessageBox.critical(self, "识别失败", message)
 
+    def _cloud_config_from_ui(self) -> CloudVisionConfig | None | bool:
+        base_url = self.cloud_base_url_edit.text().strip()
+        api_key = self.cloud_api_key_edit.text().strip()
+        model = self.cloud_model_edit.text().strip()
+        if not any((base_url, api_key, model)):
+            return None
+        if not all((base_url, api_key, model)):
+            QMessageBox.warning(self, "云端配置不完整", "Base URL、API Key、Model 必须同时填写。")
+            return False
+        return CloudVisionConfig(base_url=base_url, api_key=api_key, model=model)
+
     def _set_processing(self, processing: bool) -> None:
         self.pick_images_button.setEnabled(not processing)
         self.recognize_button.setEnabled(not processing)
         self.generate_button.setEnabled(not processing)
+        self.cloud_base_url_edit.setEnabled(not processing)
+        self.cloud_api_key_edit.setEnabled(not processing)
+        self.cloud_model_edit.setEnabled(not processing)
 
     def _manual_result_for_image(self, path: Path, warning: str) -> ImageRecognitionResult:
         return _manual_result_for_image(path, warning)
@@ -268,6 +308,8 @@ class StackToFlatPage(QWidget):
                 missing_codes=original.missing_codes,
                 warnings=list(original.warnings),
                 confidence=original.confidence,
+                recognition_source=original.recognition_source,
+                api_retry_count=original.api_retry_count,
             )
             results.append(result)
         return results
@@ -325,5 +367,16 @@ def _manual_failure_count(results: list[ImageRecognitionResult]) -> int:
     return sum(
         1
         for result in results
-        if any(warning.startswith("OCR 识别失败") for warning in result.warnings)
+        if result.recognition_source == "cloud_failed"
+        or any(warning.startswith("OCR 识别失败") for warning in result.warnings)
     )
+
+
+def _cloud_recognition_summary(results: list[ImageRecognitionResult]) -> str:
+    crop = sum(1 for result in results if result.recognition_source == "cloud_crop")
+    full = sum(1 for result in results if result.recognition_source == "cloud_full")
+    retry = sum(1 for result in results if result.recognition_source == "cloud_retry_full")
+    failed = sum(1 for result in results if result.recognition_source == "cloud_failed")
+    if not any((crop, full, retry, failed)):
+        return ""
+    return f"云端：裁剪 {crop}，整图 {full}，重试 {retry}，失败 {failed}"
