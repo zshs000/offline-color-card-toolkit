@@ -39,7 +39,11 @@ FULL_IMAGE_PROMPT = """You are a color-card recognition assistant. The user prov
 Return only JSON. Do not explain. Do not use Markdown.
 
 Requirements:
-- raw_name: read the group/name code from the top-left area of the image.
+- raw_name: read only the primary group/name identifier from the upper-left name box or the leftmost upper name area.
+- The upper-left name area has priority over all other text in the image.
+- If the upper-left name area contains a Chinese group name, return that Chinese name exactly.
+- If the upper-left name area contains a numeric/alphanumeric identifier, return that identifier exactly.
+- Do not use the upper-right Description/货名 area for raw_name, even if it contains a code and a title.
 - base_name: remove a trailing page marker from raw_name, such as (1), （2）, or -1.
 - sequence: if raw_name explicitly contains a page marker such as (1), （2）, or -1, return that integer; otherwise return null.
 - codes: read the numbers above the color blocks from left to right.

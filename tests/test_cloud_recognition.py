@@ -48,8 +48,10 @@ def test_cloud_horizontal_uses_full_image_when_crops_are_missing(monkeypatch, tm
     image_path = tmp_path / "931.jpg"
     Image.new("RGB", (120, 80), "white").save(image_path)
     monkeypatch.setattr(cloud_recognition, "crop_horizontal_api_regions", lambda path, conf=0.1: None)
+    calls = []
 
     def fake_call(config, prompt, images):
+        calls.append((prompt, images))
         return {"raw_name": "931", "base_name": "931", "sequence": None, "codes": ["1", "2", "3"]}
 
     monkeypatch.setattr(cloud_recognition, "_call_openai_compatible_vision", fake_call)
@@ -58,6 +60,9 @@ def test_cloud_horizontal_uses_full_image_when_crops_are_missing(monkeypatch, tm
 
     assert result.recognition_source == "cloud_full"
     assert result.api_retry_count == 0
+    assert len(calls) == 1
+    assert len(calls[0][1]) == 1
+    assert calls[0][1][0].size == (120, 80)
 
 
 def test_cloud_horizontal_retries_full_image_when_crop_result_is_invalid(monkeypatch, tmp_path: Path) -> None:
@@ -72,7 +77,7 @@ def test_cloud_horizontal_retries_full_image_when_crop_result_is_invalid(monkeyp
     calls = []
 
     def fake_call(config, prompt, images):
-        calls.append(prompt)
+        calls.append((prompt, images))
         if len(calls) == 1:
             raise CloudRecognitionError("bad json")
         return {"raw_name": "931", "base_name": "931", "sequence": None, "codes": ["1", "2", "3"]}
@@ -84,4 +89,5 @@ def test_cloud_horizontal_retries_full_image_when_crop_result_is_invalid(monkeyp
     assert result.recognition_source == "cloud_retry_full"
     assert result.api_retry_count == 1
     assert len(calls) == 2
+    assert len(calls[1][1]) == 1
     assert any("整图重试" in warning for warning in result.warnings)
