@@ -10,6 +10,7 @@ from color_card_toolkit.core.cloud_recognition import (
     CloudRecognitionError,
     CloudVisionConfig,
     recognize_horizontal_image_with_cloud,
+    recognize_vertical_image_with_cloud,
 )
 
 
@@ -91,3 +92,27 @@ def test_cloud_horizontal_retries_full_image_when_crop_result_is_invalid(monkeyp
     assert len(calls) == 2
     assert len(calls[1][1]) == 1
     assert any("整图重试" in warning for warning in result.warnings)
+
+
+def test_cloud_vertical_uses_full_image(monkeypatch, tmp_path: Path) -> None:
+    image_path = tmp_path / "6002(1).jpg"
+    Image.new("RGB", (80, 120), "white").save(image_path)
+    calls = []
+
+    def fake_call(config, prompt, images):
+        calls.append((prompt, images))
+        return {"raw_name": "6002(1)", "base_name": "6002", "sequence": 1, "codes": ["1", "2", "3"]}
+
+    monkeypatch.setattr(cloud_recognition, "_call_openai_compatible_vision", fake_call)
+
+    result = recognize_vertical_image_with_cloud(image_path, _config())
+
+    assert result.raw_name == "6002(1)"
+    assert result.base_name == "6002"
+    assert result.sequence == 1
+    assert result.color_codes == ["1", "2", "3"]
+    assert result.recognition_source == "cloud_vertical_full"
+    assert result.api_retry_count == 0
+    assert len(calls) == 1
+    assert len(calls[0][1]) == 1
+    assert calls[0][1][0].size == (80, 120)

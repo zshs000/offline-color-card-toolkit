@@ -82,7 +82,7 @@ class StackToFlatPage(QWidget):
         output_layout.addWidget(browse_output, 1, 2)
         layout.addWidget(output_box)
 
-        cloud_box = QGroupBox("横版云端识别")
+        cloud_box = QGroupBox("云端识别")
         cloud_layout = QGridLayout(cloud_box)
         self.cloud_base_url_edit = QLineEdit(os.environ.get("COLOR_CARD_CLOUD_BASE_URL", ""))
         self.cloud_api_key_edit = QLineEdit(os.environ.get("COLOR_CARD_CLOUD_API_KEY", ""))
@@ -94,7 +94,7 @@ class StackToFlatPage(QWidget):
         cloud_layout.addWidget(self.cloud_api_key_edit, 1, 1)
         cloud_layout.addWidget(QLabel("Model:"), 2, 0)
         cloud_layout.addWidget(self.cloud_model_edit, 2, 1)
-        cloud_layout.addWidget(QLabel("仅横版使用云端识别；竖版仍走本地识别。三项都填写后启用。"), 3, 0, 1, 2)
+        cloud_layout.addWidget(QLabel("三项都填写后启用云端识别；横版裁剪优先，竖版整图识别。"), 3, 0, 1, 2)
         layout.addWidget(cloud_box)
 
         image_box = QGroupBox("图片选择")
@@ -375,8 +375,9 @@ def _manual_failure_count(results: list[ImageRecognitionResult]) -> int:
 def _cloud_recognition_summary(results: list[ImageRecognitionResult]) -> str:
     crop = sum(1 for result in results if result.recognition_source == "cloud_crop")
     full = sum(1 for result in results if result.recognition_source == "cloud_full")
+    vertical_full = sum(1 for result in results if result.recognition_source == "cloud_vertical_full")
     retry = sum(1 for result in results if result.recognition_source == "cloud_retry_full")
     failed = sum(1 for result in results if result.recognition_source == "cloud_failed")
-    if not any((crop, full, retry, failed)):
+    if not any((crop, full, vertical_full, retry, failed)):
         return ""
-    return f"云端：裁剪 {crop}，整图 {full}，重试 {retry}，失败 {failed}"
+    return f"云端：横裁剪 {crop}，横整图 {full}，竖整图 {vertical_full}，重试 {retry}，失败 {failed}"

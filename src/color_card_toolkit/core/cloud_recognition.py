@@ -54,6 +54,27 @@ Requirements:
 Output shape:
 {"raw_name":"","base_name":"","sequence":null,"codes":[]}"""
 
+VERTICAL_FULL_IMAGE_PROMPT = """You are a color-card recognition assistant. The user provides one full vertical color-card image.
+
+Return only JSON. Do not explain. Do not use Markdown.
+
+Requirements:
+- raw_name: read only the primary group/name identifier from the upper-left name box or the leftmost upper name area.
+- The upper-left name area has priority over all other text in the image.
+- If the upper-left name area contains a Chinese group name, return that Chinese name exactly.
+- If the upper-left name area contains a numeric/alphanumeric identifier, return that identifier exactly.
+- Do not use Description, Thickness, Size, specifications, or other text for raw_name.
+- base_name: remove a trailing page marker from raw_name, such as (1), （2）, or -1.
+- sequence: if raw_name explicitly contains a page marker such as (1), （2）, or -1, return that integer; otherwise return null.
+- codes: read all color numbers beside the color blocks.
+- Read each vertical column from top to bottom.
+- If there are multiple columns, return the left column first, then middle column, then right column.
+- Do not fill numbers that are not present in the image.
+- Return all codes as strings.
+
+Output shape:
+{"raw_name":"","base_name":"","sequence":null,"codes":[]}"""
+
 
 @dataclass(frozen=True)
 class CloudVisionConfig:
@@ -104,6 +125,21 @@ def recognize_horizontal_image_with_cloud(image_path: str | Path, config: CloudV
         [_load_full_image(path)],
     )
     result = _result_from_payload(path, payload, source="cloud_full", retry_count=0)
+    _validate_cloud_result(result)
+    return result
+
+
+def recognize_vertical_image_with_cloud(image_path: str | Path, config: CloudVisionConfig) -> ImageRecognitionResult:
+    path = Path(image_path)
+    if not config.enabled:
+        raise CloudRecognitionError("cloud recognition config is incomplete")
+
+    payload = _call_openai_compatible_vision(
+        config,
+        VERTICAL_FULL_IMAGE_PROMPT,
+        [_load_full_image(path)],
+    )
+    result = _result_from_payload(path, payload, source="cloud_vertical_full", retry_count=0)
     _validate_cloud_result(result)
     return result
 

@@ -4,8 +4,10 @@ from pathlib import Path
 
 from PIL import Image
 
-from color_card_toolkit.core.models import OcrBlock, ParsedColorCodes
-from color_card_toolkit.core.recognition import _should_prefer_strip_codes, extract_group_name
+import color_card_toolkit.core.recognition as recognition_module
+from color_card_toolkit.core.cloud_recognition import CloudVisionConfig
+from color_card_toolkit.core.models import ImageRecognitionResult, OcrBlock, ParsedColorCodes
+from color_card_toolkit.core.recognition import _should_prefer_strip_codes, extract_group_name, recognize_image
 
 
 def block(text: str, x: float, y: float, w: float = 20, h: float = 12) -> OcrBlock:
@@ -37,6 +39,36 @@ def test_extract_group_name_does_not_fallback_to_promo_text(tmp_path: Path) -> N
     ]
 
     assert extract_group_name(image_path, blocks) == ""
+
+
+def test_recognize_image_routes_vertical_to_cloud_when_configured(monkeypatch, tmp_path: Path) -> None:
+    image_path = tmp_path / "6002(1).jpg"
+    Image.new("RGB", (80, 120), "white").save(image_path)
+    config = CloudVisionConfig(base_url="https://example.test/v1", api_key="key", model="model")
+
+    def fake_cloud(path, cloud_config):
+        assert path == image_path
+        assert cloud_config == config
+        return ImageRecognitionResult(
+            image_path=path,
+            raw_name="6002(1)",
+            base_name="6002",
+            sequence=1,
+            color_codes=["1", "2", "3"],
+            recognition_source="cloud_vertical_full",
+        )
+
+    monkeypatch.setattr(recognition_module, "recognize_vertical_image_with_cloud", fake_cloud)
+    monkeypatch.setattr(
+        recognition_module,
+        "_recognize_vertical_with_layout_model",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("local vertical path should not run")),
+    )
+
+    result = recognize_image(image_path, object(), cloud_config=config)
+
+    assert result.recognition_source == "cloud_vertical_full"
+    assert result.raw_name == "6002(1)"
 
 
 def test_horizontal_strip_codes_replace_noisy_main_result() -> None:
