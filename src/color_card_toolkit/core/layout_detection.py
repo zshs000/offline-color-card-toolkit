@@ -180,16 +180,7 @@ def _detect_layout(
             kept_code_detections.append(detection)
             ocr_blocks.extend(_normalize_vertical_column_blocks(code_blocks, detection))
         else:
-            expanded_detection = _expand_horizontal_code_detection(detection, image_rgb.width)
-            code_blocks = _recognize_crop(
-                image_rgb,
-                expanded_detection,
-                ocr_engine,
-                pad_x=0.0,
-                pad_y=0.01,
-                input_mode="rgb_array",
-            )
-            code_blocks = _split_horizontal_merged_code_blocks(image_rgb, expanded_detection, code_blocks)
+            expanded_detection, code_blocks = _recognize_horizontal_code_detection(image_rgb, detection, ocr_engine)
             if not _has_effective_code_blocks(code_blocks):
                 continue
             kept_code_detections.append(expanded_detection)
@@ -270,6 +261,118 @@ def _expand_horizontal_code_detection(detection: LayoutDetection, image_width: i
         confidence=detection.confidence,
         box=((0.0, detection.min_y), (float(image_width), detection.min_y), (float(image_width), detection.max_y), (0.0, detection.max_y)),
     )
+
+
+def _recognize_horizontal_code_detection(
+    image: Image.Image,
+    detection: LayoutDetection,
+    ocr_engine,
+) -> tuple[LayoutDetection, list[OcrBlock]]:
+    expanded_detection = _expand_horizontal_code_detection(detection, image.width)
+    code_blocks = _recognize_horizontal_code_crop(image, expanded_detection, ocr_engine, pad_y=0.01)
+    if _has_effective_code_blocks(code_blocks):
+        return expanded_detection, code_blocks
+
+    best_detection = expanded_detection
+    best_blocks = code_blocks
+    best_score = _score_horizontal_code_blocks(code_blocks)
+    for candidate in _horizontal_code_ocr_fallback_detections(expanded_detection, image.height):
+        candidate_blocks = _recognize_horizontal_code_crop(image, candidate, ocr_engine, pad_y=0.0)
+        candidate_score = _score_horizontal_code_blocks(candidate_blocks)
+        if candidate_score > best_score:
+            best_detection = candidate
+            best_blocks = candidate_blocks
+            best_score = candidate_score
+
+    return best_detection, best_blocks
+
+
+def _recognize_horizontal_code_crop(
+    image: Image.Image,
+    detection: LayoutDetection,
+    ocr_engine,
+    *,
+    pad_y: float,
+) -> list[OcrBlock]:
+    blocks = _recognize_crop(
+        image,
+        detection,
+        ocr_engine,
+        pad_x=0.0,
+        pad_y=pad_y,
+        input_mode="rgb_array",
+    )
+    return _split_horizontal_merged_code_blocks(image, detection, blocks)
+
+
+def _horizontal_code_ocr_fallback_detections(
+    detection: LayoutDetection,
+    image_height: int,
+) -> list[LayoutDetection]:
+    return [
+        _scale_detection_height(detection, image_height, scale)
+        for scale in (1.0, 0.86, 0.78, 0.70, 1.30, 1.60, 2.00)
+    ]
+
+
+def _scale_detection_height(
+    detection: LayoutDetection,
+    image_height: int,
+    scale: float,
+) -> LayoutDetection:
+    center_y = detection.center_y
+    half_height = max(10.0, detection.height * scale / 2)
+    y1 = max(0.0, center_y - half_height)
+    y2 = min(float(image_height), center_y + half_height)
+    return LayoutDetection(
+        label=detection.label,
+        confidence=detection.confidence,
+        box=((detection.min_x, y1), (detection.max_x, y1), (detection.max_x, y2), (detection.min_x, y2)),
+    )
+
+
+def _score_horizontal_code_blocks(blocks: list[OcrBlock]) -> tuple[int, int, int, int, float]:
+    numbers: list[int] = []
+    long_numeric_blocks = 0
+    noise_blocks = 0
+    confidence_sum = 0.0
+    for block in blocks:
+        text = str(block.text).strip()
+        digits = "".join(char for char in text if char.isdigit())
+        if text.isdigit() and len(text) <= 3:
+            numbers.append(int(text))
+            confidence_sum += block.confidence
+        elif len(digits) > 3:
+            long_numeric_blocks += 1
+        elif text:
+            noise_blocks += 1
+
+    if not numbers:
+        return (0, 0, 0, -long_numeric_blocks, 0.0)
+
+    unique_numbers = set(numbers)
+    missing_count = max(numbers) - min(numbers) + 1 - len(unique_numbers)
+    duplicate_count = len(numbers) - len(unique_numbers)
+    average_confidence = confidence_sum / len(numbers)
+    return (
+        len(numbers),
+        _longest_incrementing_run(numbers),
+        -missing_count,
+        -(duplicate_count + long_numeric_blocks + noise_blocks),
+        average_confidence,
+    )
+
+
+def _longest_incrementing_run(numbers: list[int]) -> int:
+    longest = 1
+    current = 1
+    for previous, number in zip(numbers, numbers[1:]):
+        if number == previous + 1:
+            current += 1
+        else:
+            current = 1
+        longest = max(longest, current)
+    return longest
 
 
 def _dedupe_code_detections(detections: list[LayoutDetection]) -> list[LayoutDetection]:
