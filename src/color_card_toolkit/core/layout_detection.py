@@ -14,6 +14,7 @@ from color_card_toolkit.core.resources import horizontal_layout_model_path, vert
 LayoutOrientation = Literal["vertical", "horizontal"]
 
 VERTICAL_ASPECT_RATIO_THRESHOLD = 1.2
+HORIZONTAL_CODE_FALLBACK_CONFS = (0.1, 0.05, 0.01)
 _CLASS_NAMES = {
     "name_area": "name_area",
     "code_area": "code_area",
@@ -144,23 +145,23 @@ def _detect_layout(
         return LayoutDetectionResult(None, [], [], [f"image load failed: {exc}"])
 
     try:
-        predictions = model.predict(
-            source=np.array(image_rgb),
-            imgsz=imgsz,
-            conf=conf,
-            iou=iou,
-            verbose=False,
-            device="cpu",
-        )
+        detections = _predict_layout_detections(model, image_rgb, imgsz=imgsz, conf=conf, iou=iou)
     except Exception as exc:
         return LayoutDetectionResult(None, [], [], [f"{orientation} layout detection failed: {exc}"])
 
-    detections = _parse_predictions(predictions)
     name_detection = _pick_best_name_detection(detections)
     if orientation == "vertical":
         code_detections = _prepare_vertical_code_detections(detections)
     else:
         code_detections = _prepare_horizontal_code_detections(detections)
+        if not code_detections:
+            code_detections = _find_horizontal_code_detections_at_lower_conf(
+                model,
+                image_rgb,
+                imgsz=imgsz,
+                current_conf=conf,
+                iou=iou,
+            )
 
     if not name_detection and not code_detections:
         return LayoutDetectionResult(None, [], [], [f"{orientation} layout model found no valid regions"])
@@ -232,6 +233,43 @@ def _parse_predictions(predictions) -> list[LayoutDetection]:
             )
         )
     return detections
+
+
+def _predict_layout_detections(
+    model,
+    image: Image.Image,
+    *,
+    imgsz: int,
+    conf: float,
+    iou: float,
+) -> list[LayoutDetection]:
+    predictions = model.predict(
+        source=np.array(image),
+        imgsz=imgsz,
+        conf=conf,
+        iou=iou,
+        verbose=False,
+        device="cpu",
+    )
+    return _parse_predictions(predictions)
+
+
+def _find_horizontal_code_detections_at_lower_conf(
+    model,
+    image: Image.Image,
+    *,
+    imgsz: int,
+    current_conf: float,
+    iou: float,
+) -> list[LayoutDetection]:
+    for fallback_conf in HORIZONTAL_CODE_FALLBACK_CONFS:
+        if fallback_conf >= current_conf:
+            continue
+        detections = _predict_layout_detections(model, image, imgsz=imgsz, conf=fallback_conf, iou=iou)
+        code_detections = _prepare_horizontal_code_detections(detections)
+        if code_detections:
+            return code_detections
+    return []
 
 
 def _pick_best_name_detection(detections: list[LayoutDetection]) -> LayoutDetection | None:
