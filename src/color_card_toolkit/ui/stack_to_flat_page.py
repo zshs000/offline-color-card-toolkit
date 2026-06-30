@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -30,7 +30,12 @@ from color_card_toolkit.core.cloud_recognition import CloudVisionConfig
 from color_card_toolkit.core.grouping import group_recognition_results, parse_group_name
 from color_card_toolkit.core.models import ImageRecognitionResult, normalize_code_list
 from color_card_toolkit.core.ocr_engine import RapidOcrEngine
-from color_card_toolkit.core.recognition_logging import summarize_api_usage, write_recognition_log
+from color_card_toolkit.core.recognition_logging import concurrency_ratio, summarize_api_usage, write_recognition_log
+from color_card_toolkit.core.recognition_settings import (
+    RecognitionSettings,
+    load_recognition_settings,
+    save_recognition_settings,
+)
 from color_card_toolkit.core.recognition import recognize_image
 from color_card_toolkit.core.resources import flat_template_path
 from color_card_toolkit.core.word_generator import generate_flat_template_docx
@@ -48,7 +53,8 @@ class StackToFlatPage(QWidget):
         self._batch_controller = None
         self._recognition_started_at: datetime | None = None
         self._active_cloud_config: CloudVisionConfig | None = None
-        self._horizontal_use_yolo = True
+        self._recognition_finished_at: datetime | None = None
+        self._recognition_settings = load_recognition_settings()
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -88,21 +94,6 @@ class StackToFlatPage(QWidget):
         output_layout.addWidget(self.output_folder_edit, 1, 1)
         output_layout.addWidget(browse_output, 1, 2)
         layout.addWidget(output_box)
-
-        cloud_box = QGroupBox("云端识别")
-        cloud_layout = QGridLayout(cloud_box)
-        self.cloud_base_url_edit = QLineEdit(os.environ.get("COLOR_CARD_CLOUD_BASE_URL", ""))
-        self.cloud_api_key_edit = QLineEdit(os.environ.get("COLOR_CARD_CLOUD_API_KEY", ""))
-        self.cloud_api_key_edit.setEchoMode(QLineEdit.Password)
-        self.cloud_model_edit = QLineEdit(os.environ.get("COLOR_CARD_CLOUD_MODEL", ""))
-        cloud_layout.addWidget(QLabel("Base URL:"), 0, 0)
-        cloud_layout.addWidget(self.cloud_base_url_edit, 0, 1)
-        cloud_layout.addWidget(QLabel("API Key:"), 1, 0)
-        cloud_layout.addWidget(self.cloud_api_key_edit, 1, 1)
-        cloud_layout.addWidget(QLabel("Model:"), 2, 0)
-        cloud_layout.addWidget(self.cloud_model_edit, 2, 1)
-        cloud_layout.addWidget(QLabel("三项都填写后启用云端识别；横版策略可在下方识别设置中调整。"), 3, 0, 1, 2)
-        layout.addWidget(cloud_box)
 
         image_box = QGroupBox("图片选择")
         image_layout = QHBoxLayout(image_box)
@@ -170,11 +161,12 @@ class StackToFlatPage(QWidget):
             return
         self._results = []
         self._set_processing(True)
-        cloud_config = self._cloud_config_from_ui()
+        cloud_config = self._cloud_config_from_settings()
         if cloud_config is False:
             self._set_processing(False)
             return
         self._recognition_started_at = datetime.now()
+        self._recognition_finished_at = None
         self._active_cloud_config = cloud_config if isinstance(cloud_config, CloudVisionConfig) else None
 
         engine_holder = threading.local()
@@ -201,7 +193,7 @@ class StackToFlatPage(QWidget):
                 failed_count + _manual_failure_count(results),
             ),
             on_failed=self._on_recognition_failed,
-            max_workers=2,
+            max_workers=cloud_config.concurrency if isinstance(cloud_config, CloudVisionConfig) else 2,
             parent=self,
         )
 
@@ -210,6 +202,7 @@ class StackToFlatPage(QWidget):
 
     def _on_recognition_finished(self, results: list[ImageRecognitionResult], failed_count: int) -> None:
         self._batch_controller = None
+        self._recognition_finished_at = datetime.now()
         self._results = list(results)
         self._populate_table(self._results)
         self._set_processing(False)
@@ -231,10 +224,10 @@ class StackToFlatPage(QWidget):
         self._set_processing(False)
         QMessageBox.critical(self, "识别失败", message)
 
-    def _cloud_config_from_ui(self) -> CloudVisionConfig | None | bool:
-        base_url = self.cloud_base_url_edit.text().strip()
-        api_key = self.cloud_api_key_edit.text().strip()
-        model = self.cloud_model_edit.text().strip()
+    def _cloud_config_from_settings(self) -> CloudVisionConfig | None | bool:
+        base_url = self._recognition_settings.base_url.strip()
+        api_key = self._recognition_settings.api_key.strip()
+        model = self._recognition_settings.model.strip()
         if not any((base_url, api_key, model)):
             return None
         if not all((base_url, api_key, model)):
@@ -244,17 +237,41 @@ class StackToFlatPage(QWidget):
             base_url=base_url,
             api_key=api_key,
             model=model,
-            horizontal_use_yolo=self._horizontal_use_yolo,
+            horizontal_use_yolo=self._recognition_settings.horizontal_use_yolo,
+            concurrency=self._recognition_settings.cloud_concurrency,
         )
 
     def _open_settings_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("识别设置")
         layout = QVBoxLayout(dialog)
+        form = QGridLayout()
+        base_url_edit = QLineEdit(self._recognition_settings.base_url)
+        api_key_edit = QLineEdit(self._recognition_settings.api_key)
+        api_key_edit.setEchoMode(QLineEdit.Password)
+        model_edit = QLineEdit(self._recognition_settings.model)
+        form.addWidget(QLabel("Base URL:"), 0, 0)
+        form.addWidget(base_url_edit, 0, 1)
+        form.addWidget(QLabel("API Key:"), 1, 0)
+        form.addWidget(api_key_edit, 1, 1)
+        form.addWidget(QLabel("Model:"), 2, 0)
+        form.addWidget(model_edit, 2, 1)
+        layout.addLayout(form)
+
         horizontal_yolo_checkbox = QCheckBox("横版使用 YOLO 裁剪后再云端识别")
-        horizontal_yolo_checkbox.setChecked(self._horizontal_use_yolo)
+        horizontal_yolo_checkbox.setChecked(self._recognition_settings.horizontal_use_yolo)
         layout.addWidget(horizontal_yolo_checkbox)
-        note = QLabel("关闭后，横版会直接整图发送给云端；通常更快但 token 消耗更高。竖版始终整图云端识别。")
+
+        concurrency_spinbox = QSpinBox()
+        concurrency_spinbox.setRange(1, 10)
+        concurrency_spinbox.setValue(self._recognition_settings.cloud_concurrency)
+        concurrency_layout = QHBoxLayout()
+        concurrency_layout.addWidget(QLabel("云端并发数："))
+        concurrency_layout.addWidget(concurrency_spinbox)
+        concurrency_layout.addStretch(1)
+        layout.addLayout(concurrency_layout)
+
+        note = QLabel("保存后会写入本地设置文件。关闭横版 YOLO 后，横版会直接整图发送给云端；竖版始终整图云端识别。并发结果会按图片原顺序回填。")
         note.setWordWrap(True)
         layout.addWidget(note)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -262,16 +279,23 @@ class StackToFlatPage(QWidget):
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         if dialog.exec() == QDialog.Accepted:
-            self._horizontal_use_yolo = horizontal_yolo_checkbox.isChecked()
+            self._recognition_settings = RecognitionSettings(
+                base_url=base_url_edit.text().strip(),
+                api_key=api_key_edit.text().strip(),
+                model=model_edit.text().strip(),
+                horizontal_use_yolo=horizontal_yolo_checkbox.isChecked(),
+                cloud_concurrency=concurrency_spinbox.value(),
+            )
+            try:
+                save_recognition_settings(self._recognition_settings)
+            except Exception as exc:
+                QMessageBox.warning(self, "设置保存失败", str(exc))
 
     def _set_processing(self, processing: bool) -> None:
         self.pick_images_button.setEnabled(not processing)
         self.recognize_button.setEnabled(not processing)
         self.generate_button.setEnabled(not processing)
         self.settings_button.setEnabled(not processing)
-        self.cloud_base_url_edit.setEnabled(not processing)
-        self.cloud_api_key_edit.setEnabled(not processing)
-        self.cloud_model_edit.setEnabled(not processing)
 
     def _write_recognition_log(self, failed_count: int) -> Path | None:
         if self._active_cloud_config is None:
@@ -283,7 +307,7 @@ class StackToFlatPage(QWidget):
                 failed_count=failed_count,
                 cloud_config=self._active_cloud_config,
                 started_at=started_at,
-                finished_at=datetime.now(),
+                finished_at=self._recognition_finished_at or datetime.now(),
             )
         except Exception as exc:
             QMessageBox.warning(self, "日志写入失败", str(exc))
@@ -293,13 +317,19 @@ class StackToFlatPage(QWidget):
         usage = summarize_api_usage(self._results)
         if not usage["total_tokens"]:
             return
+        started_at = self._recognition_started_at or datetime.now()
+        finished_at = self._recognition_finished_at or datetime.now()
+        wall_seconds = max(0.0, (finished_at - started_at).total_seconds())
+        ratio = concurrency_ratio(usage["api_elapsed_seconds"], wall_seconds)
         message = (
             "本次云端识别消耗：\n"
             f"输入：{usage['prompt_tokens'] / 1000:.3f} kToken\n"
             f"输出：{usage['completion_tokens'] / 1000:.3f} kToken\n"
             f"总计：{usage['total_tokens'] / 1000:.3f} kToken\n"
             f"预估费用：{usage['estimated_cost_rmb']:.6f} 元\n"
-            f"API 耗时合计：{usage['api_elapsed_seconds']:.2f} 秒"
+            f"实际耗时：{wall_seconds:.2f} 秒\n"
+            f"API 耗时合计：{usage['api_elapsed_seconds']:.2f} 秒\n"
+            f"并发倍率：{ratio:.2f}x"
         )
         if log_path is not None:
             message += f"\n日志文件：{log_path}"

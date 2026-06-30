@@ -91,6 +91,7 @@ class CloudVisionConfig:
     timeout_seconds: int = 90
     enable_thinking: bool | None = False
     horizontal_use_yolo: bool = True
+    concurrency: int = 4
     input_price_per_million_tokens: float = 1.2
     output_price_per_million_tokens: float = 7.2
 

@@ -48,4 +48,6 @@ def test_write_recognition_log_summarizes_usage_and_redacts_api_key(tmp_path: Pa
     assert payload["summary"]["prompt_tokens"] == 1000
     assert payload["summary"]["completion_tokens"] == 100
     assert payload["summary"]["estimated_cost_rmb"] == 0.00192
+    assert payload["summary"]["batch_wall_seconds"] == 8.0
+    assert payload["summary"]["concurrency_ratio"] == 0.9375
     assert payload["results"][0]["api_model"] == "qwen3.6-flash"

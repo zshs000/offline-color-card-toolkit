@@ -40,17 +40,27 @@ def write_recognition_log(
     output_dir = logs_dir or Path.cwd() / "logs"
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = output_dir / f"recognition_{finished_at.strftime('%Y%m%d_%H%M%S')}.json"
+    wall_seconds = (finished_at - started_at).total_seconds()
+    summary = summarize_api_usage(results)
+    summary["batch_wall_seconds"] = wall_seconds
+    summary["concurrency_ratio"] = concurrency_ratio(summary["api_elapsed_seconds"], wall_seconds)
     payload = {
         "started_at": started_at.isoformat(timespec="seconds"),
         "finished_at": finished_at.isoformat(timespec="seconds"),
-        "duration_seconds": round((finished_at - started_at).total_seconds(), 3),
+        "duration_seconds": round(wall_seconds, 3),
         "failed_count": failed_count,
         "cloud_config": _safe_cloud_config(cloud_config),
-        "summary": summarize_api_usage(results),
+        "summary": summary,
         "results": [_result_payload(result) for result in results],
     }
     log_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return log_path
+
+
+def concurrency_ratio(api_elapsed_seconds: float, wall_seconds: float) -> float:
+    if wall_seconds <= 0:
+        return 0.0
+    return api_elapsed_seconds / wall_seconds
 
 
 def _safe_cloud_config(config: CloudVisionConfig | None) -> dict[str, Any] | None:
@@ -62,6 +72,7 @@ def _safe_cloud_config(config: CloudVisionConfig | None) -> dict[str, Any] | Non
         "model": config.model,
         "enable_thinking": config.enable_thinking,
         "horizontal_use_yolo": config.horizontal_use_yolo,
+        "concurrency": config.concurrency,
         "input_price_per_million_tokens": config.input_price_per_million_tokens,
         "output_price_per_million_tokens": config.output_price_per_million_tokens,
     }
