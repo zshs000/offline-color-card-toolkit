@@ -61,13 +61,9 @@ class StackToFlatPage(QWidget):
         back_button.clicked.connect(self._on_back)
         title = QLabel("叠贴转平贴模板生成")
         title.setStyleSheet("font-size: 20px; font-weight: 600;")
-        self.settings_button = QPushButton("⚙")
-        self.settings_button.setToolTip("识别设置")
-        self.settings_button.clicked.connect(self._open_settings_dialog)
         header.addWidget(back_button)
         header.addWidget(title)
         header.addStretch(1)
-        header.addWidget(self.settings_button)
         layout.addLayout(header)
 
         template_box = QGroupBox("平贴模板")
@@ -105,7 +101,7 @@ class StackToFlatPage(QWidget):
         cloud_layout.addWidget(self.cloud_api_key_edit, 1, 1)
         cloud_layout.addWidget(QLabel("Model:"), 2, 0)
         cloud_layout.addWidget(self.cloud_model_edit, 2, 1)
-        cloud_layout.addWidget(QLabel("三项都填写后启用云端识别；横版策略可在右上角设置。"), 3, 0, 1, 2)
+        cloud_layout.addWidget(QLabel("三项都填写后启用云端识别；横版策略可在下方识别设置中调整。"), 3, 0, 1, 2)
         layout.addWidget(cloud_box)
 
         image_box = QGroupBox("图片选择")
@@ -129,9 +125,16 @@ class StackToFlatPage(QWidget):
 
         footer = QHBoxLayout()
         footer.addStretch(1)
+        self.settings_button = QPushButton("识别设置")
+        self.settings_button.setMinimumWidth(96)
+        self.settings_button.setToolTip("设置横版云端识别策略")
+        self.settings_button.clicked.connect(self._open_settings_dialog)
+        footer.addWidget(self.settings_button)
+        footer.addSpacing(12)
         self.generate_button = QPushButton("生成 Word")
         self.generate_button.clicked.connect(self._generate_word)
         footer.addWidget(self.generate_button)
+        footer.addStretch(1)
         layout.addLayout(footer)
 
     def _open_template(self) -> None:
