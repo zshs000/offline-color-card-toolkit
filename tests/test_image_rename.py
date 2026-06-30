@@ -4,7 +4,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageOps
 
 import color_card_toolkit.core.image_rename as image_rename_module
 from color_card_toolkit.core.image_rename import (
@@ -37,6 +38,21 @@ def test_extract_top_left_name_uses_only_top_left_text(tmp_path: Path) -> None:
     assert extract_top_left_name(image_path, blocks) == "PU6159"
 
 
+def test_extract_top_left_name_uses_exif_transposed_display_size(tmp_path: Path) -> None:
+    image_path = tmp_path / "rotated.jpg"
+    image = Image.new("RGB", (100, 300), "white")
+    exif = Image.Exif()
+    exif[274] = 6
+    image.save(image_path, exif=exif)
+    blocks = [
+        block("0951", 20, 2, 80, 20),
+    ]
+
+    assert Image.open(image_path).size == (100, 300)
+    assert ImageOps.exif_transpose(Image.open(image_path)).size == (300, 100)
+    assert extract_top_left_name(image_path, blocks) == "0951"
+
+
 def test_unique_output_path_adds_numeric_suffix_for_duplicates(tmp_path: Path) -> None:
     existing = tmp_path / "PU6159.jpg"
     existing.write_bytes(b"existing")
@@ -56,6 +72,34 @@ def test_rename_scan_images_copies_original_bytes_with_recognized_name(tmp_path:
     assert results[0].output_path == output_dir / "PU6159.jpg"
     assert results[0].output_path.read_bytes() == original_bytes
     assert results[0].recognized_name == "PU6159"
+
+
+def test_rename_scan_images_sends_exif_transposed_image_to_ocr(tmp_path: Path) -> None:
+    image_path = tmp_path / "rotated.jpg"
+    image = Image.new("RGB", (100, 300), "red")
+    exif = Image.Exif()
+    exif[274] = 6
+    image.save(image_path, exif=exif, quality=91)
+    original_bytes = image_path.read_bytes()
+    output_dir = tmp_path / "renamed"
+
+    class RecordingEngine:
+        seen_shape = None
+
+        def recognize(self, image_path):
+            raise AssertionError("path OCR should not be used when image-object OCR is available")
+
+        def recognize_image_object(self, image):
+            self.seen_shape = np.array(image).shape
+            return [block("0951", 20, 2, 80, 20)]
+
+    engine = RecordingEngine()
+
+    results = rename_scan_images([image_path], output_dir, engine)
+
+    assert engine.seen_shape[:2] == (100, 300)
+    assert results[0].output_path == output_dir / "0951.jpg"
+    assert results[0].output_path.read_bytes() == original_bytes
 
 
 def test_parallel_rename_scan_images_reserves_duplicate_output_names(monkeypatch, tmp_path: Path) -> None:

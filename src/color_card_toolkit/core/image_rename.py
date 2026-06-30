@@ -6,7 +6,8 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageOps
 
 from color_card_toolkit.core.models import OcrBlock
 from color_card_toolkit.core.ocr_engine import OcrEngine
@@ -77,7 +78,7 @@ def rename_scan_images(
     for image_path in image_paths:
         source = Path(image_path)
         warnings: list[str] = []
-        blocks = ocr_engine.recognize(source)
+        blocks = _recognize_display_image(source, ocr_engine)
         recognized_name = extract_top_left_name(source, blocks)
         if not recognized_name:
             recognized_name = _safe_filename(source.stem) or "未识别"
@@ -105,7 +106,7 @@ def crop_main_images(
     for image_path in image_paths:
         source = Path(image_path)
         warnings: list[str] = []
-        blocks = ocr_engine.recognize(source)
+        blocks = _recognize_display_image(source, ocr_engine)
         recognized_name = extract_top_left_name(source, blocks)
         if not recognized_name:
             recognized_name = _safe_filename(source.stem) or "未识别"
@@ -121,6 +122,8 @@ def crop_main_images(
 
 def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> None:
     with Image.open(source) as image:
+        source_format = image.format
+        image = ImageOps.exif_transpose(image)
         dpi_x, dpi_y = _image_dpi(image)
         crop_width = min(_cm_to_pixels(crop_size_cm, dpi_x), image.width)
         crop_height = min(_cm_to_pixels(crop_size_cm, dpi_y), image.height)
@@ -129,14 +132,15 @@ def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> None:
         cropped = image.crop((left, top, left + crop_width, top + crop_height))
 
         save_kwargs = {}
-        if (image.format or "").upper() in {"JPEG", "JPG"}:
+        if (source_format or "").upper() in {"JPEG", "JPG"}:
             save_kwargs = {"quality": 100, "subsampling": 0}
-        cropped.save(output_path, format=image.format, **save_kwargs)
+        cropped.save(output_path, format=source_format, **save_kwargs)
 
 
 def _image_size(image_path: Path, blocks: list[OcrBlock]) -> tuple[float, float]:
     try:
         with Image.open(image_path) as image:
+            image = ImageOps.exif_transpose(image)
             return float(image.width), float(image.height)
     except Exception:
         if not blocks:
@@ -158,6 +162,15 @@ def _image_dpi(image: Image.Image) -> tuple[int, int]:
         except (TypeError, ValueError):
             pass
     return DEFAULT_DPI, DEFAULT_DPI
+
+
+def _recognize_display_image(image_path: Path, ocr_engine: OcrEngine) -> list[OcrBlock]:
+    recognize_image_object = getattr(ocr_engine, "recognize_image_object", None)
+    if callable(recognize_image_object):
+        with Image.open(image_path) as image:
+            display_image = ImageOps.exif_transpose(image).convert("RGB")
+            return list(recognize_image_object(np.array(display_image)))
+    return ocr_engine.recognize(image_path)
 
 
 def _cm_to_pixels(centimeters: int, dpi: int) -> int:
