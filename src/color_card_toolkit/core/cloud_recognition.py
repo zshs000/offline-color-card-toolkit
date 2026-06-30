@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -67,8 +68,14 @@ Requirements:
 - base_name: remove a trailing page marker from raw_name, such as (1), （2）, or -1.
 - sequence: if raw_name explicitly contains a page marker such as (1), （2）, or -1, return that integer; otherwise return null.
 - codes: read all color numbers beside the color blocks.
-- Read each vertical column from top to bottom.
-- If there are multiple columns, return the left column first, then middle column, then right column.
+- Codes may be numeric, such as 1 or 28, or alphanumeric, such as A1, A2, A3, B1, or B2.
+- Missing or skipped numeric codes are normal; do not force the result into a continuous sequence.
+- The vertical color-card may have either 2 code columns or 3 code columns.
+- Detect the actual number of code columns from the image.
+- The `codes` array order must be column order, not row order.
+- If there are 2 columns, return all codes from the left column top-to-bottom, then all codes from the right column top-to-bottom.
+- If there are 3 columns, return all codes from the left column top-to-bottom, then all codes from the middle column top-to-bottom, then all codes from the right column top-to-bottom.
+- Do not invent a missing middle column. Do not merge separate columns.
 - Do not fill numbers that are not present in the image.
 - Return all codes as strings.
 
@@ -82,6 +89,10 @@ class CloudVisionConfig:
     api_key: str
     model: str
     timeout_seconds: int = 90
+    enable_thinking: bool | None = False
+    horizontal_use_yolo: bool = True
+    input_price_per_million_tokens: float = 1.2
+    output_price_per_million_tokens: float = 7.2
 
     @property
     def enabled(self) -> bool:
@@ -92,39 +103,50 @@ class CloudRecognitionError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class CloudVisionResponse:
+    content_text: str
+    usage: dict[str, Any]
+    elapsed_seconds: float
+
+
 def recognize_horizontal_image_with_cloud(image_path: str | Path, config: CloudVisionConfig) -> ImageRecognitionResult:
     path = Path(image_path)
     if not config.enabled:
         raise CloudRecognitionError("cloud recognition config is incomplete")
 
-    crops = crop_horizontal_api_regions(path, conf=0.1)
+    crops = crop_horizontal_api_regions(path, conf=0.1) if config.horizontal_use_yolo else None
     if crops is not None:
+        crop_result: ImageRecognitionResult | None = None
         try:
-            payload = _call_openai_compatible_vision(
+            response = _call_openai_compatible_vision(
                 config,
                 CROP_PROMPT,
                 [crops.name_image, crops.code_image],
             )
-            result = _result_from_payload(path, payload, source="cloud_crop", retry_count=0)
+            crop_result = _result_from_response(path, response, config=config, source="cloud_crop", retry_count=0)
+            result = crop_result
             _validate_cloud_result(result)
             return result
         except Exception as crop_exc:
-            payload = _call_openai_compatible_vision(
+            response = _call_openai_compatible_vision(
                 config,
                 FULL_IMAGE_PROMPT,
                 [_load_full_image(path)],
             )
-            result = _result_from_payload(path, payload, source="cloud_retry_full", retry_count=1)
+            result = _result_from_response(path, response, config=config, source="cloud_retry_full", retry_count=1)
+            if crop_result is not None:
+                _merge_api_usage(result, crop_result)
             result.warnings.append(f"裁剪云端识别失败，已整图重试：{crop_exc}")
             _validate_cloud_result(result)
             return result
 
-    payload = _call_openai_compatible_vision(
+    response = _call_openai_compatible_vision(
         config,
         FULL_IMAGE_PROMPT,
         [_load_full_image(path)],
     )
-    result = _result_from_payload(path, payload, source="cloud_full", retry_count=0)
+    result = _result_from_response(path, response, config=config, source="cloud_full", retry_count=0)
     _validate_cloud_result(result)
     return result
 
@@ -134,12 +156,12 @@ def recognize_vertical_image_with_cloud(image_path: str | Path, config: CloudVis
     if not config.enabled:
         raise CloudRecognitionError("cloud recognition config is incomplete")
 
-    payload = _call_openai_compatible_vision(
+    response = _call_openai_compatible_vision(
         config,
         VERTICAL_FULL_IMAGE_PROMPT,
         [_load_full_image(path)],
     )
-    result = _result_from_payload(path, payload, source="cloud_vertical_full", retry_count=0)
+    result = _result_from_response(path, response, config=config, source="cloud_vertical_full", retry_count=0)
     _validate_cloud_result(result)
     return result
 
@@ -148,7 +170,7 @@ def _call_openai_compatible_vision(
     config: CloudVisionConfig,
     prompt: str,
     images: list[Image.Image],
-) -> dict[str, Any]:
+) -> CloudVisionResponse:
     url = _chat_completions_url(config.base_url)
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     content.extend(
@@ -163,6 +185,8 @@ def _call_openai_compatible_vision(
         "messages": [{"role": "user", "content": content}],
         "temperature": 0,
     }
+    if config.enable_thinking is not None:
+        body["enable_thinking"] = config.enable_thinking
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
@@ -172,6 +196,7 @@ def _call_openai_compatible_vision(
         },
         method="POST",
     )
+    start = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=config.timeout_seconds) as response:
             response_body = response.read().decode("utf-8")
@@ -187,7 +212,11 @@ def _call_openai_compatible_vision(
     except Exception as exc:
         raise CloudRecognitionError(f"cloud API response shape is invalid: {response_body[:500]}") from exc
 
-    return _parse_json_object(content_text)
+    return CloudVisionResponse(
+        content_text=content_text,
+        usage=data.get("usage") if isinstance(data.get("usage"), dict) else {},
+        elapsed_seconds=time.perf_counter() - start,
+    )
 
 
 def _chat_completions_url(base_url: str) -> str:
@@ -226,12 +255,35 @@ def _parse_json_object(text: str) -> dict[str, Any]:
     return value
 
 
+def _result_from_response(
+    image_path: Path,
+    response: CloudVisionResponse,
+    *,
+    config: CloudVisionConfig,
+    source: str,
+    retry_count: int,
+) -> ImageRecognitionResult:
+    payload = _parse_json_object(response.content_text)
+    return _result_from_payload(
+        image_path,
+        payload,
+        source=source,
+        retry_count=retry_count,
+        usage=response.usage,
+        elapsed_seconds=response.elapsed_seconds,
+        config=config,
+    )
+
+
 def _result_from_payload(
     image_path: Path,
     payload: dict[str, Any],
     *,
     source: str,
     retry_count: int,
+    usage: dict[str, Any] | None = None,
+    elapsed_seconds: float = 0.0,
+    config: CloudVisionConfig | None = None,
 ) -> ImageRecognitionResult:
     raw_name = str(payload.get("raw_name") or "").strip()
     parsed = parse_group_name(raw_name or image_path.stem.strip())
@@ -239,6 +291,14 @@ def _result_from_payload(
     sequence_value = payload.get("sequence")
     sequence, explicit_sequence = _parse_sequence(sequence_value, parsed.sequence, parsed.explicit_sequence)
     codes = _normalize_cloud_codes(payload.get("codes"))
+    usage = usage or {}
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
+    prompt_details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    input_price = config.input_price_per_million_tokens if config is not None else 0.0
+    output_price = config.output_price_per_million_tokens if config is not None else 0.0
+    estimated_cost = (prompt_tokens / 1_000_000 * input_price) + (completion_tokens / 1_000_000 * output_price)
     return ImageRecognitionResult(
         image_path=image_path,
         raw_name=raw_name,
@@ -251,7 +311,25 @@ def _result_from_payload(
         confidence=1.0,
         recognition_source=source,
         api_retry_count=retry_count,
+        api_prompt_tokens=prompt_tokens,
+        api_completion_tokens=completion_tokens,
+        api_total_tokens=total_tokens,
+        api_image_tokens=int(prompt_details.get("image_tokens") or 0),
+        api_text_tokens=int(prompt_details.get("text_tokens") or 0),
+        api_estimated_cost_rmb=estimated_cost,
+        api_elapsed_seconds=elapsed_seconds,
+        api_model=config.model if config is not None else "",
     )
+
+
+def _merge_api_usage(target: ImageRecognitionResult, extra: ImageRecognitionResult) -> None:
+    target.api_prompt_tokens += extra.api_prompt_tokens
+    target.api_completion_tokens += extra.api_completion_tokens
+    target.api_total_tokens += extra.api_total_tokens
+    target.api_image_tokens += extra.api_image_tokens
+    target.api_text_tokens += extra.api_text_tokens
+    target.api_estimated_cost_rmb += extra.api_estimated_cost_rmb
+    target.api_elapsed_seconds += extra.api_elapsed_seconds
 
 
 def _parse_sequence(value: Any, fallback: int, fallback_explicit: bool) -> tuple[int, bool]:

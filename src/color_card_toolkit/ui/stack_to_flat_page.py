@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import os
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QGridLayout,
     QGroupBox,
@@ -27,6 +30,7 @@ from color_card_toolkit.core.cloud_recognition import CloudVisionConfig
 from color_card_toolkit.core.grouping import group_recognition_results, parse_group_name
 from color_card_toolkit.core.models import ImageRecognitionResult, normalize_code_list
 from color_card_toolkit.core.ocr_engine import RapidOcrEngine
+from color_card_toolkit.core.recognition_logging import summarize_api_usage, write_recognition_log
 from color_card_toolkit.core.recognition import recognize_image
 from color_card_toolkit.core.resources import flat_template_path
 from color_card_toolkit.core.word_generator import generate_flat_template_docx
@@ -42,6 +46,9 @@ class StackToFlatPage(QWidget):
         self._image_paths: list[Path] = []
         self._results: list[ImageRecognitionResult] = []
         self._batch_controller = None
+        self._recognition_started_at: datetime | None = None
+        self._active_cloud_config: CloudVisionConfig | None = None
+        self._horizontal_use_yolo = True
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -54,9 +61,13 @@ class StackToFlatPage(QWidget):
         back_button.clicked.connect(self._on_back)
         title = QLabel("叠贴转平贴模板生成")
         title.setStyleSheet("font-size: 20px; font-weight: 600;")
+        self.settings_button = QPushButton("⚙")
+        self.settings_button.setToolTip("识别设置")
+        self.settings_button.clicked.connect(self._open_settings_dialog)
         header.addWidget(back_button)
         header.addWidget(title)
         header.addStretch(1)
+        header.addWidget(self.settings_button)
         layout.addLayout(header)
 
         template_box = QGroupBox("平贴模板")
@@ -94,7 +105,7 @@ class StackToFlatPage(QWidget):
         cloud_layout.addWidget(self.cloud_api_key_edit, 1, 1)
         cloud_layout.addWidget(QLabel("Model:"), 2, 0)
         cloud_layout.addWidget(self.cloud_model_edit, 2, 1)
-        cloud_layout.addWidget(QLabel("三项都填写后启用云端识别；横版裁剪优先，竖版整图识别。"), 3, 0, 1, 2)
+        cloud_layout.addWidget(QLabel("三项都填写后启用云端识别；横版策略可在右上角设置。"), 3, 0, 1, 2)
         layout.addWidget(cloud_box)
 
         image_box = QGroupBox("图片选择")
@@ -160,6 +171,8 @@ class StackToFlatPage(QWidget):
         if cloud_config is False:
             self._set_processing(False)
             return
+        self._recognition_started_at = datetime.now()
+        self._active_cloud_config = cloud_config if isinstance(cloud_config, CloudVisionConfig) else None
 
         engine_holder = threading.local()
 
@@ -201,6 +214,8 @@ class StackToFlatPage(QWidget):
         cloud_summary = _cloud_recognition_summary(self._results)
         if cloud_summary:
             self.image_summary.setText(f"{self.image_summary.text()}; {cloud_summary}")
+        log_path = self._write_recognition_log(failed_count)
+        self._show_cloud_usage_summary(log_path)
         if failed_count:
             QMessageBox.warning(
                 self,
@@ -222,15 +237,70 @@ class StackToFlatPage(QWidget):
         if not all((base_url, api_key, model)):
             QMessageBox.warning(self, "云端配置不完整", "Base URL、API Key、Model 必须同时填写。")
             return False
-        return CloudVisionConfig(base_url=base_url, api_key=api_key, model=model)
+        return CloudVisionConfig(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            horizontal_use_yolo=self._horizontal_use_yolo,
+        )
+
+    def _open_settings_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("识别设置")
+        layout = QVBoxLayout(dialog)
+        horizontal_yolo_checkbox = QCheckBox("横版使用 YOLO 裁剪后再云端识别")
+        horizontal_yolo_checkbox.setChecked(self._horizontal_use_yolo)
+        layout.addWidget(horizontal_yolo_checkbox)
+        note = QLabel("关闭后，横版会直接整图发送给云端；通常更快但 token 消耗更高。竖版始终整图云端识别。")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() == QDialog.Accepted:
+            self._horizontal_use_yolo = horizontal_yolo_checkbox.isChecked()
 
     def _set_processing(self, processing: bool) -> None:
         self.pick_images_button.setEnabled(not processing)
         self.recognize_button.setEnabled(not processing)
         self.generate_button.setEnabled(not processing)
+        self.settings_button.setEnabled(not processing)
         self.cloud_base_url_edit.setEnabled(not processing)
         self.cloud_api_key_edit.setEnabled(not processing)
         self.cloud_model_edit.setEnabled(not processing)
+
+    def _write_recognition_log(self, failed_count: int) -> Path | None:
+        if self._active_cloud_config is None:
+            return None
+        started_at = self._recognition_started_at or datetime.now()
+        try:
+            return write_recognition_log(
+                self._results,
+                failed_count=failed_count,
+                cloud_config=self._active_cloud_config,
+                started_at=started_at,
+                finished_at=datetime.now(),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "日志写入失败", str(exc))
+            return None
+
+    def _show_cloud_usage_summary(self, log_path: Path | None) -> None:
+        usage = summarize_api_usage(self._results)
+        if not usage["total_tokens"]:
+            return
+        message = (
+            "本次云端识别消耗：\n"
+            f"输入：{usage['prompt_tokens'] / 1000:.3f} kToken\n"
+            f"输出：{usage['completion_tokens'] / 1000:.3f} kToken\n"
+            f"总计：{usage['total_tokens'] / 1000:.3f} kToken\n"
+            f"预估费用：{usage['estimated_cost_rmb']:.6f} 元\n"
+            f"API 耗时合计：{usage['api_elapsed_seconds']:.2f} 秒"
+        )
+        if log_path is not None:
+            message += f"\n日志文件：{log_path}"
+        QMessageBox.information(self, "云端识别消耗", message)
 
     def _manual_result_for_image(self, path: Path, warning: str) -> ImageRecognitionResult:
         return _manual_result_for_image(path, warning)
@@ -310,6 +380,14 @@ class StackToFlatPage(QWidget):
                 confidence=original.confidence,
                 recognition_source=original.recognition_source,
                 api_retry_count=original.api_retry_count,
+                api_prompt_tokens=original.api_prompt_tokens,
+                api_completion_tokens=original.api_completion_tokens,
+                api_total_tokens=original.api_total_tokens,
+                api_image_tokens=original.api_image_tokens,
+                api_text_tokens=original.api_text_tokens,
+                api_estimated_cost_rmb=original.api_estimated_cost_rmb,
+                api_elapsed_seconds=original.api_elapsed_seconds,
+                api_model=original.api_model,
             )
             results.append(result)
         return results

@@ -77,6 +77,14 @@ class ImageRecognitionResult:
     confidence: float = 0.0
     recognition_source: str = ""
     api_retry_count: int = 0
+    api_prompt_tokens: int = 0
+    api_completion_tokens: int = 0
+    api_total_tokens: int = 0
+    api_image_tokens: int = 0
+    api_text_tokens: int = 0
+    api_estimated_cost_rmb: float = 0.0
+    api_elapsed_seconds: float = 0.0
+    api_model: str = ""
 
     @property
     def display_missing_codes(self) -> str:
