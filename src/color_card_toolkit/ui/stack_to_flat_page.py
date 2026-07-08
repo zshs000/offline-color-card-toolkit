@@ -122,6 +122,16 @@ class StackToFlatPage(QWidget):
         self.settings_button.clicked.connect(self._open_settings_dialog)
         footer.addWidget(self.settings_button)
         footer.addSpacing(12)
+        self.recognize_selected_button = QPushButton("重新识别选中项")
+        self.recognize_selected_button.setToolTip("对表格中已勾选“参与”的行重新识别，完成后自动排序")
+        self.recognize_selected_button.clicked.connect(self._recognize_selected)
+        footer.addWidget(self.recognize_selected_button)
+        footer.addSpacing(12)
+        self.clear_button = QPushButton("清空")
+        self.clear_button.setToolTip("清空当前所选图片与识别结果")
+        self.clear_button.clicked.connect(self._on_clear_clicked)
+        footer.addWidget(self.clear_button)
+        footer.addSpacing(12)
         self.generate_button = QPushButton("生成 Word")
         self.generate_button.clicked.connect(self._generate_word)
         footer.addWidget(self.generate_button)
@@ -296,6 +306,8 @@ class StackToFlatPage(QWidget):
         self.recognize_button.setEnabled(not processing)
         self.generate_button.setEnabled(not processing)
         self.settings_button.setEnabled(not processing)
+        self.recognize_selected_button.setEnabled(not processing)
+        self.clear_button.setEnabled(not processing)
 
     def _write_recognition_log(self, failed_count: int) -> Path | None:
         if self._active_cloud_config is None:
@@ -344,7 +356,7 @@ class StackToFlatPage(QWidget):
             checkbox = QCheckBox()
             checkbox.setChecked(result.participate)
             checkbox.setProperty("row", row)
-            checkbox.stateChanged.connect(lambda state, r=row: self._set_participate(r, state == Qt.Checked))
+            checkbox.stateChanged.connect(lambda state, r=row: self._set_participate(r, bool(state)))
             self.table.setCellWidget(row, 0, checkbox)
             self._set_item(row, 1, result.image_path.name, editable=False)
             self._set_item(row, 2, result.raw_name)
@@ -360,6 +372,102 @@ class StackToFlatPage(QWidget):
         self.table.setRowCount(0)
         self.image_summary.setText("未选择图片")
 
+    def _on_clear_clicked(self) -> None:
+        if not self._results and not self._image_paths:
+            self._clear_recognition_state()
+            return
+        reply = QMessageBox.question(
+            self,
+            "确认清空",
+            "确定要清空当前所选图片与识别结果吗？此操作不可撤销。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self._clear_recognition_state()
+
+    def _recognize_selected(self) -> None:
+        if not self._results:
+            QMessageBox.information(self, "没有识别结果", "请先完成一次识别，再重新识别选中项。")
+            return
+        # 先把表格中的手工编辑同步回结果，避免重新识别时丢失
+        self._results = self._results_from_table()
+        selected_rows = [row for row, result in enumerate(self._results) if result.participate]
+        if not selected_rows:
+            QMessageBox.information(self, "未选择行", "请勾选“参与”列以选择需要重新识别的行。")
+            return
+
+        selected_paths = [self._results[row].image_path for row in selected_rows]
+        cloud_config = self._cloud_config_from_settings()
+        if cloud_config is False:
+            return
+
+        self._set_processing(True)
+        self._recognition_started_at = datetime.now()
+        self._recognition_finished_at = None
+        self._active_cloud_config = cloud_config if isinstance(cloud_config, CloudVisionConfig) else None
+
+        engine_holder = threading.local()
+
+        def process(path: Path) -> ImageRecognitionResult:
+            try:
+                if not hasattr(engine_holder, "engine"):
+                    engine_holder.engine = RapidOcrEngine(
+                        intra_op_num_threads=1,
+                        inter_op_num_threads=1,
+                    )
+                if cloud_config:
+                    return recognize_image(path, engine_holder.engine, cloud_config=cloud_config)
+                return recognize_image(path, engine_holder.engine)
+            except Exception as exc:
+                return _manual_result_for_image(path, f"OCR 识别失败：{exc}。已使用文件名作为组名，请手动修正。")
+
+        self._batch_controller = run_batch_task(
+            selected_paths,
+            process,
+            on_progress=self._on_recognition_progress,
+            on_finished=lambda results, failed_count: self._on_reselect_finished(
+                results,
+                failed_count + _manual_failure_count(results),
+            ),
+            on_failed=self._on_recognition_failed,
+            max_workers=cloud_config.concurrency if isinstance(cloud_config, CloudVisionConfig) else 2,
+            parent=self,
+        )
+
+    def _on_reselect_finished(self, results: list[ImageRecognitionResult], failed_count: int) -> None:
+        self._batch_controller = None
+        self._recognition_finished_at = datetime.now()
+        # 用新结果按图片路径回填对应行，保留其它行不变
+        updated_by_path = {result.image_path: result for result in results}
+        merged: list[ImageRecognitionResult] = []
+        for original in self._results:
+            new_result = updated_by_path.get(original.image_path)
+            if new_result is not None:
+                new_result.participate = original.participate
+                merged.append(new_result)
+            else:
+                merged.append(original)
+        self._results = merged
+        self._sort_results()
+        self._populate_table(self._results)
+        self._set_processing(False)
+        self.image_summary.setText(f"已重新识别 {len(results)} 张图片，共 {len(self._results)} 条")
+        cloud_summary = _cloud_recognition_summary(results)
+        if cloud_summary:
+            self.image_summary.setText(f"{self.image_summary.text()}; {cloud_summary}")
+        log_path = self._write_recognition_log(failed_count)
+        self._show_cloud_usage_summary(log_path)
+        if failed_count:
+            QMessageBox.warning(
+                self,
+                "部分图片识别失败",
+                f"{failed_count} 张图片重新识别失败，已生成可编辑行供手动修正。",
+            )
+
+    def _sort_results(self) -> None:
+        self._results.sort(key=lambda result: (result.base_name.strip(), result.sequence))
+
     def _set_item(self, row: int, column: int, text: str, *, editable: bool = True) -> None:
         item = QTableWidgetItem(text)
         if not editable:
@@ -370,8 +478,14 @@ class StackToFlatPage(QWidget):
         if 0 <= row < len(self._results):
             self._results[row].participate = participate
 
+    def _row_participate(self, row: int, fallback: bool) -> bool:
+        widget = self.table.cellWidget(row, 0)
+        if isinstance(widget, QCheckBox):
+            return widget.isChecked()
+        return fallback
+
     def _results_from_table(self) -> list[ImageRecognitionResult]:
-        rows: list[tuple[int, ImageRecognitionResult, str, str, int, list[str], bool]] = []
+        rows: list[tuple[int, ImageRecognitionResult, str, str, int, list[str], bool, bool]] = []
         for row, original in enumerate(self._results):
             raw_name = self._item_text(row, 2)
             base_name = self._item_text(row, 3)
@@ -382,6 +496,7 @@ class StackToFlatPage(QWidget):
             except ValueError:
                 sequence = parsed.sequence
             cleaned_base_name = base_name.strip() or parsed.base_name
+            participate = self._row_participate(row, original.participate)
             rows.append(
                 (
                     row,
@@ -391,15 +506,16 @@ class StackToFlatPage(QWidget):
                     sequence,
                     normalize_code_list(self._item_text(row, 5)),
                     parsed.explicit_sequence,
+                    participate,
                 )
             )
 
         base_counts: dict[str, int] = {}
-        for _, _, _, base_name, _, _, _ in rows:
+        for _, _, _, base_name, _, _, _, _ in rows:
             base_counts[base_name] = base_counts.get(base_name, 0) + 1
 
         results: list[ImageRecognitionResult] = []
-        for row, original, raw_name, base_name, sequence, color_codes, explicit_sequence in rows:
+        for row, original, raw_name, base_name, sequence, color_codes, explicit_sequence, participate in rows:
             result = ImageRecognitionResult(
                 image_path=original.image_path,
                 raw_name=raw_name,
@@ -407,7 +523,7 @@ class StackToFlatPage(QWidget):
                 sequence=sequence,
                 explicit_sequence=explicit_sequence or sequence != 1 or base_counts.get(base_name, 0) > 1,
                 color_codes=color_codes,
-                participate=original.participate,
+                participate=participate,
                 missing_codes=original.missing_codes,
                 warnings=list(original.warnings),
                 confidence=original.confidence,
@@ -455,7 +571,6 @@ class StackToFlatPage(QWidget):
             QMessageBox.critical(self, "生成失败", str(exc))
             return
 
-        self._clear_recognition_state()
         QMessageBox.information(self, "生成完成", f"Word 已生成：\n{generated}")
 
 
