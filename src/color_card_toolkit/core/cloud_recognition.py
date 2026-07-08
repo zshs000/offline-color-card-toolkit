@@ -286,9 +286,9 @@ def _result_from_payload(
     elapsed_seconds: float = 0.0,
     config: CloudVisionConfig | None = None,
 ) -> ImageRecognitionResult:
-    raw_name = str(payload.get("raw_name") or "").strip()
+    raw_name = _normalize_cloud_name(str(payload.get("raw_name") or ""))
     parsed = parse_group_name(raw_name or image_path.stem.strip())
-    base_name = str(payload.get("base_name") or "").strip() or parsed.base_name
+    base_name = _normalize_cloud_name(str(payload.get("base_name") or "")) or parsed.base_name
     sequence_value = payload.get("sequence")
     sequence, explicit_sequence = _parse_sequence(sequence_value, parsed.sequence, parsed.explicit_sequence)
     codes = _normalize_cloud_codes(payload.get("codes"))
@@ -340,6 +340,27 @@ def _parse_sequence(value: Any, fallback: int, fallback_explicit: bool) -> tuple
         return int(value), True
     except (TypeError, ValueError):
         return fallback, fallback_explicit
+
+
+def _normalize_cloud_name(value: str) -> str:
+    """Clean a cloud-recognized name.
+
+    Removes spaces inserted between CJK characters (e.g. ``60 后`` -> ``60后``)
+    and collapses redundant whitespace, so that names group consistently.
+    """
+    text = value.strip()
+    if not text:
+        return text
+    # Characters that a name space should be collapsed against: CJK chars,
+    # ASCII digits/letters, and half/full-width parentheses. The model
+    # sometimes inserts stray spaces (e.g. "60 后", "申 公 豹", "柔镜 （3）").
+    cjk = r"\u4e00-\u9fff\u3400-\u4dbf"
+    edge = rf"{cjk}0-9A-Za-z（）()"
+    # Remove whitespace that touches a CJK character on either side.
+    pattern = rf"(?<=[{edge}])\s+(?=[{cjk}])|(?<=[{cjk}])\s+(?=[{edge}])"
+    text = re.sub(pattern, "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def _normalize_cloud_codes(value: Any) -> list[str]:
