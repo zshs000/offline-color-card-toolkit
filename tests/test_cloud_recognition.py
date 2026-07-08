@@ -33,6 +33,18 @@ def _response(payload: dict, *, prompt_tokens: int = 10, completion_tokens: int 
     )
 
 
+def test_horizontal_cloud_prompts_use_white_background_label_for_group_name() -> None:
+    required_text = "white-background label/tag"
+    required_chinese_text = "白底标签"
+
+    assert required_text in cloud_recognition.CROP_PROMPT
+    assert required_text in cloud_recognition.FULL_IMAGE_PROMPT
+    assert required_chinese_text in cloud_recognition.CROP_PROMPT
+    assert required_chinese_text in cloud_recognition.FULL_IMAGE_PROMPT
+    assert "00后" not in cloud_recognition.CROP_PROMPT
+    assert "00后" not in cloud_recognition.FULL_IMAGE_PROMPT
+
+
 def test_cloud_horizontal_uses_crops_when_yolo_regions_are_available(monkeypatch, tmp_path: Path) -> None:
     image_path = tmp_path / "931.jpg"
     Image.new("RGB", (120, 80), "white").save(image_path)

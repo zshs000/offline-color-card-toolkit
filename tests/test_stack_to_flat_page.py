@@ -5,7 +5,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox
 
 import color_card_toolkit.ui.stack_to_flat_page as stack_to_flat_page_module
 from color_card_toolkit.core.models import ImageRecognitionResult
@@ -57,6 +57,40 @@ def test_output_folder_defaults_to_user_output_directory() -> None:
     page = StackToFlatPage(on_back=lambda: None)
 
     assert Path(page.output_folder_edit.text()).name == "线下色卡采集工具集输出"
+
+
+def test_participation_buttons_select_and_clear_all_rows(tmp_path: Path) -> None:
+    _app()
+    page = StackToFlatPage(on_back=lambda: None)
+    page._results = [
+        ImageRecognitionResult(
+            image_path=tmp_path / "PU88-1.png",
+            raw_name="PU88(1)",
+            base_name="PU88",
+            sequence=1,
+            color_codes=["01"],
+            participate=True,
+        ),
+        ImageRecognitionResult(
+            image_path=tmp_path / "PU88-2.png",
+            raw_name="PU88(2)",
+            base_name="PU88",
+            sequence=2,
+            color_codes=["02"],
+            participate=False,
+        ),
+    ]
+    page._populate_table(page._results)
+
+    page.select_none_button.click()
+
+    assert [result.participate for result in page._results] == [False, False]
+    assert [_participation_checkbox(page, row).isChecked() for row in range(2)] == [False, False]
+
+    page.select_all_button.click()
+
+    assert [result.participate for result in page._results] == [True, True]
+    assert [_participation_checkbox(page, row).isChecked() for row in range(2)] == [True, True]
 
 
 def test_recognize_images_runs_batch_and_populates_table(monkeypatch, tmp_path: Path) -> None:
@@ -127,3 +161,9 @@ def _run_batch_task_immediately(
                 on_item_failed(index, Path(item).name, str(exc))
     on_finished(results, failed_count)
     return object()
+
+
+def _participation_checkbox(page: StackToFlatPage, row: int) -> QCheckBox:
+    widget = page.table.cellWidget(row, 0)
+    assert isinstance(widget, QCheckBox)
+    return widget

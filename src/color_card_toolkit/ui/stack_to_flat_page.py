@@ -116,6 +116,16 @@ class StackToFlatPage(QWidget):
 
         footer = QHBoxLayout()
         footer.addStretch(1)
+        self.select_all_button = QPushButton("全选")
+        self.select_all_button.setToolTip("勾选所有识别结果参与生成")
+        self.select_all_button.clicked.connect(lambda: self._set_all_participation(True))
+        footer.addWidget(self.select_all_button)
+        footer.addSpacing(12)
+        self.select_none_button = QPushButton("全不选")
+        self.select_none_button.setToolTip("取消所有识别结果参与生成")
+        self.select_none_button.clicked.connect(lambda: self._set_all_participation(False))
+        footer.addWidget(self.select_none_button)
+        footer.addSpacing(12)
         self.settings_button = QPushButton("识别设置")
         self.settings_button.setMinimumWidth(96)
         self.settings_button.setToolTip("设置横版云端识别策略")
@@ -308,6 +318,8 @@ class StackToFlatPage(QWidget):
         self.settings_button.setEnabled(not processing)
         self.recognize_selected_button.setEnabled(not processing)
         self.clear_button.setEnabled(not processing)
+        self.select_all_button.setEnabled(not processing)
+        self.select_none_button.setEnabled(not processing)
 
     def _write_recognition_log(self, failed_count: int) -> Path | None:
         if self._active_cloud_config is None:
@@ -477,6 +489,13 @@ class StackToFlatPage(QWidget):
     def _set_participate(self, row: int, participate: bool) -> None:
         if 0 <= row < len(self._results):
             self._results[row].participate = participate
+
+    def _set_all_participation(self, participate: bool) -> None:
+        for row, result in enumerate(self._results):
+            result.participate = participate
+            widget = self.table.cellWidget(row, 0)
+            if isinstance(widget, QCheckBox):
+                widget.setChecked(participate)
 
     def _row_participate(self, row: int, fallback: bool) -> bool:
         widget = self.table.cellWidget(row, 0)

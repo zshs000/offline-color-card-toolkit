@@ -24,7 +24,11 @@ CROP_PROMPT = """You are a color-card recognition assistant. The user provides t
 Return only JSON. Do not explain. Do not use Markdown.
 
 Requirements:
-- raw_name: read the group/name code from the first image.
+- raw_name: read the group/name code from the white-background label/tag in the first image.
+- The white-background label/tag is the authoritative source for raw_name.
+- Ignore text outside the white-background label/tag when choosing raw_name.
+- 组名必须从白底标签/白底贴纸中读取。
+- 不要把非白底区域、装饰文字、说明文字、货名文字当作组名。
 - base_name: remove a trailing page marker from raw_name, such as (1), （2）, or -1.
 - sequence: if raw_name explicitly contains a page marker such as (1), （2）, or -1, return that integer; otherwise return null.
 - codes: read the number row in the second image from left to right.
@@ -40,8 +44,11 @@ FULL_IMAGE_PROMPT = """You are a color-card recognition assistant. The user prov
 Return only JSON. Do not explain. Do not use Markdown.
 
 Requirements:
-- raw_name: read only the primary group/name identifier from the upper-left name box or the leftmost upper name area.
-- The upper-left name area has priority over all other text in the image.
+- raw_name: read only the primary group/name identifier from the white-background label/tag.
+- The white-background label/tag is the authoritative source for raw_name and has priority over all other text in the image.
+- Ignore text outside the white-background label/tag when choosing raw_name.
+- 组名必须从白底标签/白底贴纸中读取。
+- 不要把非白底区域、装饰文字、说明文字、货名文字当作组名。
 - If the upper-left name area contains a Chinese group name, return that Chinese name exactly.
 - If the upper-left name area contains a numeric/alphanumeric identifier, return that identifier exactly.
 - Do not use the upper-right Description/货名 area for raw_name, even if it contains a code and a title.
