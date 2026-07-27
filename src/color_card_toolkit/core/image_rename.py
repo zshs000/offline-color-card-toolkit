@@ -5,6 +5,7 @@ import shutil
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 from PIL import Image, ImageOps
@@ -13,6 +14,8 @@ from color_card_toolkit.core.models import OcrBlock
 from color_card_toolkit.core.ocr_engine import OcrEngine
 
 DEFAULT_DPI = 300
+RULER_DETECTION_MAX_SIZE = 1500
+RULER_EDGE_MIN_CONTRAST = 20.0
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _OUTPUT_PATH_LOCK = threading.Lock()
 
@@ -95,9 +98,10 @@ def rename_scan_images(
 def crop_main_images(
     image_paths: list[str | Path],
     output_dir: str | Path,
-    ocr_engine: OcrEngine,
+    ocr_engine: OcrEngine | None,
     *,
     crop_size_cm: int,
+    name_recognizer: Callable[[Path], str] | None = None,
 ) -> list[ImageProcessResult]:
     folder = Path(output_dir)
     folder.mkdir(parents=True, exist_ok=True)
@@ -106,35 +110,96 @@ def crop_main_images(
     for image_path in image_paths:
         source = Path(image_path)
         warnings: list[str] = []
-        blocks = _recognize_display_image(source, ocr_engine)
-        recognized_name = extract_top_left_name(source, blocks)
+        if name_recognizer is not None:
+            try:
+                recognized_name = _safe_filename(name_recognizer(source))
+            except Exception as exc:
+                recognized_name = ""
+                warnings.append(f"云端名称识别失败：{exc}")
+        elif ocr_engine is not None:
+            blocks = _recognize_display_image(source, ocr_engine)
+            recognized_name = extract_top_left_name(source, blocks)
+        else:
+            recognized_name = ""
         if not recognized_name:
             recognized_name = _safe_filename(source.stem) or "未识别"
-            warnings.append("左上角名称识别为空，已使用原文件名")
+            warnings.append("名称识别为空，已使用原文件名")
 
         with _OUTPUT_PATH_LOCK:
             output_path = unique_output_path(folder, recognized_name, source.suffix)
-            _crop_image(source, output_path, crop_size_cm)
+            ruler_found = _crop_image(source, output_path, crop_size_cm)
+        if not ruler_found:
+            warnings.append("未检测到上方和左侧标尺，已按原有方式从图片中心裁剪")
         results.append(ImageProcessResult(source, output_path, recognized_name, warnings))
 
     return results
 
 
-def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> None:
+def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> bool:
     with Image.open(source) as image:
         source_format = image.format
         image = ImageOps.exif_transpose(image)
         dpi_x, dpi_y = _image_dpi(image)
         crop_width = min(_cm_to_pixels(crop_size_cm, dpi_x), image.width)
         crop_height = min(_cm_to_pixels(crop_size_cm, dpi_y), image.height)
-        left = max(0, (image.width - crop_width) // 2)
-        top = max(0, (image.height - crop_height) // 2)
-        cropped = image.crop((left, top, left + crop_width, top + crop_height))
+        ruler_origin = _find_ruler_origin(image)
+        if ruler_origin is None:
+            left = max(0, (image.width - crop_width) // 2)
+            top = max(0, (image.height - crop_height) // 2)
+            crop_box = (left, top, left + crop_width, top + crop_height)
+        else:
+            origin_x, origin_y = ruler_origin
+            crop_box = (
+                0,
+                0,
+                min(image.width, origin_x + crop_width),
+                min(image.height, origin_y + crop_height),
+            )
+        cropped = image.crop(crop_box)
 
         save_kwargs = {}
         if (source_format or "").upper() in {"JPEG", "JPG"}:
             save_kwargs = {"quality": 100, "subsampling": 0}
         cropped.save(output_path, format=source_format, **save_kwargs)
+        return ruler_origin is not None
+
+
+def _find_ruler_origin(image: Image.Image) -> tuple[int, int] | None:
+    scale = min(1.0, RULER_DETECTION_MAX_SIZE / max(image.width, image.height))
+    analysis_width = max(1, round(image.width * scale))
+    analysis_height = max(1, round(image.height * scale))
+    analysis = image.convert("L").resize(
+        (analysis_width, analysis_height),
+        Image.Resampling.BILINEAR,
+    )
+    gray = np.asarray(analysis, dtype=np.float32)
+
+    x_profile = np.median(
+        gray[int(analysis_height * 0.2) : int(analysis_height * 0.75), :],
+        axis=0,
+    )
+    y_profile = np.median(
+        gray[:, int(analysis_width * 0.2) : int(analysis_width * 0.85)],
+        axis=1,
+    )
+    x_start, x_end = int(analysis_width * 0.03), int(analysis_width * 0.12)
+    y_start, y_end = int(analysis_height * 0.03), int(analysis_height * 0.12)
+    if x_end - x_start < 2 or y_end - y_start < 2:
+        return None
+
+    x_edges = np.abs(np.diff(x_profile[x_start:x_end]))
+    y_edges = np.abs(np.diff(y_profile[y_start:y_end]))
+    if x_edges.max(initial=0) < RULER_EDGE_MIN_CONTRAST:
+        return None
+    if y_edges.max(initial=0) < RULER_EDGE_MIN_CONTRAST:
+        return None
+
+    origin_x = x_start + int(np.argmax(x_edges)) + 1
+    origin_y = y_start + int(np.argmax(y_edges)) + 1
+    return (
+        round(origin_x / scale),
+        round(origin_y / scale),
+    )
 
 
 def _image_size(image_path: Path, blocks: list[OcrBlock]) -> tuple[float, float]:

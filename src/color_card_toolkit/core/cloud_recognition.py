@@ -89,6 +89,23 @@ Requirements:
 Output shape:
 {"raw_name":"","base_name":"","sequence":null,"codes":[]}"""
 
+MAIN_IMAGE_NAME_PROMPT = """You are a product material name recognition assistant. The user provides one full material scan.
+
+Return only JSON. Do not explain. Do not use Markdown.
+
+Requirements:
+- Find the white rectangular product label anywhere in the full image.
+- Read only the product name/code printed inside that white rectangular label.
+- Ignore all ruler numbers, ruler ticks, material patterns, and text outside that white label.
+- Preserve Chinese characters, letters, digits, spaces, hyphens, and parentheses exactly as printed.
+- Do not invent or complete unclear characters.
+- If the label cannot be read, return an empty string.
+
+Output shape:
+{"name":""}"""
+
+MAIN_IMAGE_CLOUD_MAX_SIZE = 2048
+
 
 @dataclass(frozen=True)
 class CloudVisionConfig:
@@ -174,6 +191,23 @@ def recognize_vertical_image_with_cloud(image_path: str | Path, config: CloudVis
     return result
 
 
+def recognize_main_image_name_with_cloud(image_path: str | Path, config: CloudVisionConfig) -> str:
+    path = Path(image_path)
+    if not config.enabled:
+        raise CloudRecognitionError("cloud recognition config is incomplete")
+
+    response = _call_openai_compatible_vision(
+        config,
+        MAIN_IMAGE_NAME_PROMPT,
+        [_load_main_image_for_cloud(path)],
+    )
+    payload = _parse_json_object(response.content_text)
+    name = _normalize_cloud_name(str(payload.get("name") or ""))
+    if not name:
+        raise CloudRecognitionError("cloud response did not contain a readable main-image name")
+    return name
+
+
 def _call_openai_compatible_vision(
     config: CloudVisionConfig,
     prompt: str,
@@ -225,6 +259,16 @@ def _call_openai_compatible_vision(
         usage=data.get("usage") if isinstance(data.get("usage"), dict) else {},
         elapsed_seconds=time.perf_counter() - start,
     )
+
+
+def _load_main_image_for_cloud(path: Path) -> Image.Image:
+    with Image.open(path) as opened:
+        image = ImageOps.exif_transpose(opened).convert("RGB")
+        image.thumbnail(
+            (MAIN_IMAGE_CLOUD_MAX_SIZE, MAIN_IMAGE_CLOUD_MAX_SIZE),
+            Image.Resampling.LANCZOS,
+        )
+        return image
 
 
 def _chat_completions_url(base_url: str) -> str:

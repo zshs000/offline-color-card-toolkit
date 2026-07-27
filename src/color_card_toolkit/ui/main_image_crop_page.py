@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QGridLayout,
     QGroupBox,
@@ -18,8 +19,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from color_card_toolkit.core.cloud_recognition import (
+    CloudVisionConfig,
+    recognize_main_image_name_with_cloud,
+)
 from color_card_toolkit.core.image_rename import ImageProcessResult, crop_main_images
-from color_card_toolkit.core.ocr_engine import RapidOcrEngine
+from color_card_toolkit.core.recognition_settings import (
+    RecognitionSettings,
+    load_recognition_settings,
+    save_recognition_settings,
+)
 from color_card_toolkit.ui.batch_worker import run_batch_task
 
 
@@ -29,6 +38,7 @@ class MainImageCropPage(QWidget):
         self._on_back = on_back
         self._image_paths: list[Path] = []
         self._batch_controller = None
+        self._recognition_settings = load_recognition_settings()
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -72,6 +82,9 @@ class MainImageCropPage(QWidget):
 
         footer = QHBoxLayout()
         footer.addStretch(1)
+        self.settings_button = QPushButton("识别设置")
+        self.settings_button.clicked.connect(self._open_settings_dialog)
+        footer.addWidget(self.settings_button)
         self.confirm_button = QPushButton("确认")
         self.confirm_button.clicked.connect(self._confirm_crop)
         footer.addWidget(self.confirm_button)
@@ -106,21 +119,23 @@ class MainImageCropPage(QWidget):
         output_folder_text = self.output_folder_edit.text().strip()
         output_folder = Path(output_folder_text) if output_folder_text else self._default_output_folder()
         crop_size_cm = int(self.size_combo.currentData())
+        cloud_config = self._cloud_config_from_settings()
+        if cloud_config is False:
+            return
+        if cloud_config is None:
+            QMessageBox.warning(self, "未配置云端识别", "请先在“识别设置”中填写 Base URL、API Key 和 Model。")
+            return
+
         self._set_processing(True)
         failures: list[str] = []
-        engine_holder = threading.local()
 
         def process(path: Path) -> ImageProcessResult:
-            if not hasattr(engine_holder, "engine"):
-                engine_holder.engine = RapidOcrEngine(
-                    intra_op_num_threads=1,
-                    inter_op_num_threads=1,
-                )
             results = crop_main_images(
                 [path],
                 output_folder,
-                engine_holder.engine,
+                None,
                 crop_size_cm=crop_size_cm,
+                name_recognizer=lambda source: recognize_main_image_name_with_cloud(source, cloud_config),
             )
             if not results:
                 raise RuntimeError("未生成输出文件")
@@ -159,13 +174,19 @@ class MainImageCropPage(QWidget):
         self._set_processing(False)
         success_count = len(results)
         self._clear_selected_images()
-        if failed_count:
-            detail = "\n".join(failures[:5])
-            suffix = f"\n\n失败明细：\n{detail}" if detail else ""
+        warnings = [
+            f"{result.source_path.name}：{warning}"
+            for result in results
+            for warning in result.warnings
+        ]
+        if failed_count or warnings:
+            details = failures + warnings
+            detail = "\n".join(details[:5])
+            suffix = f"\n\n明细：\n{detail}" if detail else ""
             QMessageBox.warning(
                 self,
-                "截图完成（部分失败）",
-                f"已保存 {success_count} 张图片到：\n{output_folder}\n\n失败 {failed_count} 张。{suffix}",
+                "截图完成（有提示）",
+                f"已保存 {success_count} 张图片到：\n{output_folder}\n\n失败 {failed_count} 张，提示 {len(warnings)} 条。{suffix}",
             )
             return
         QMessageBox.information(self, "截图完成", f"已保存 {success_count} 张图片到：\n{output_folder}")
@@ -181,7 +202,64 @@ class MainImageCropPage(QWidget):
         self.pick_images_button.setEnabled(not processing)
         self.confirm_button.setEnabled(not processing)
         self.size_combo.setEnabled(not processing)
+        self.settings_button.setEnabled(not processing)
 
     def _clear_selected_images(self) -> None:
         self._image_paths = []
         self.image_summary.setText("未选择图片")
+
+    def _cloud_config_from_settings(self) -> CloudVisionConfig | None | bool:
+        base_url = self._recognition_settings.base_url.strip()
+        api_key = self._recognition_settings.api_key.strip()
+        model = self._recognition_settings.model.strip()
+        if not any((base_url, api_key, model)):
+            return None
+        if not all((base_url, api_key, model)):
+            QMessageBox.warning(self, "云端配置不完整", "Base URL、API Key、Model 必须同时填写。")
+            return False
+        return CloudVisionConfig(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            horizontal_use_yolo=self._recognition_settings.horizontal_use_yolo,
+            concurrency=self._recognition_settings.cloud_concurrency,
+        )
+
+    def _open_settings_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("识别设置")
+        layout = QVBoxLayout(dialog)
+        form = QGridLayout()
+        base_url_edit = QLineEdit(self._recognition_settings.base_url)
+        api_key_edit = QLineEdit(self._recognition_settings.api_key)
+        api_key_edit.setEchoMode(QLineEdit.Password)
+        model_edit = QLineEdit(self._recognition_settings.model)
+        form.addWidget(QLabel("Base URL:"), 0, 0)
+        form.addWidget(base_url_edit, 0, 1)
+        form.addWidget(QLabel("API Key:"), 1, 0)
+        form.addWidget(api_key_edit, 1, 1)
+        form.addWidget(QLabel("Model:"), 2, 0)
+        form.addWidget(model_edit, 2, 1)
+        layout.addLayout(form)
+
+        note = QLabel("这里与“叠贴转平贴模板生成”共用云端接口和模型配置；主图处理固定使用 2 并发。")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        self._recognition_settings = RecognitionSettings(
+            base_url=base_url_edit.text().strip(),
+            api_key=api_key_edit.text().strip(),
+            model=model_edit.text().strip(),
+            horizontal_use_yolo=self._recognition_settings.horizontal_use_yolo,
+            cloud_concurrency=self._recognition_settings.cloud_concurrency,
+        )
+        try:
+            save_recognition_settings(self._recognition_settings)
+        except Exception as exc:
+            QMessageBox.warning(self, "设置保存失败", str(exc))

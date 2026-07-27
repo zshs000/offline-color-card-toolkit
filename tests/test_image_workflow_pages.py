@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 import color_card_toolkit.ui.main_image_crop_page as main_crop_module
 import color_card_toolkit.ui.scan_rename_page as scan_rename_module
 from color_card_toolkit.core.image_rename import ImageProcessResult
+from color_card_toolkit.core.recognition_settings import RecognitionSettings
 from color_card_toolkit.ui.main_window import MainWindow
 from color_card_toolkit.ui.main_image_crop_page import MainImageCropPage
 from color_card_toolkit.ui.scan_rename_page import ScanRenamePage
@@ -98,17 +99,25 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     page.size_combo.setCurrentIndex(1)
     page._image_paths = [source]
     page.image_summary.setText("已选择 1 张图片")
+    page._recognition_settings = RecognitionSettings(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="model",
+        cloud_concurrency=6,
+    )
     captured: dict[str, object] = {}
 
-    def fake_crop(image_paths, output_dir, ocr_engine, *, crop_size_cm):
+    def fake_crop(image_paths, output_dir, ocr_engine, *, crop_size_cm, name_recognizer):
         captured["crop_size_cm"] = crop_size_cm
+        captured["ocr_engine"] = ocr_engine
+        captured["recognized_name"] = name_recognizer(image_paths[0])
         return [ImageProcessResult(image_paths[0], output, "Main01")]
 
-    def fake_engine(**kwargs):
-        captured["engine_kwargs"] = kwargs
-        return object()
-
-    monkeypatch.setattr(main_crop_module, "RapidOcrEngine", fake_engine)
+    monkeypatch.setattr(
+        main_crop_module,
+        "recognize_main_image_name_with_cloud",
+        lambda path, config: "Main01",
+    )
     monkeypatch.setattr(main_crop_module, "crop_main_images", fake_crop)
     monkeypatch.setattr(
         main_crop_module,
@@ -127,8 +136,10 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     assert page.browse_output_button.isEnabled()
     assert page.confirm_button.isEnabled()
     assert page.pick_images_button.isEnabled()
+    assert page.settings_button.isEnabled()
     assert captured["max_workers"] == 2
-    assert captured["engine_kwargs"] == {"intra_op_num_threads": 1, "inter_op_num_threads": 1}
+    assert captured["ocr_engine"] is None
+    assert captured["recognized_name"] == "Main01"
 
 
 def _run_batch_task_immediately(

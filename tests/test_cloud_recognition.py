@@ -12,6 +12,7 @@ from color_card_toolkit.core.cloud_recognition import (
     CloudVisionResponse,
     CloudVisionConfig,
     recognize_horizontal_image_with_cloud,
+    recognize_main_image_name_with_cloud,
     recognize_vertical_image_with_cloud,
 )
 
@@ -177,3 +178,24 @@ def test_cloud_vertical_uses_full_image(monkeypatch, tmp_path: Path) -> None:
     assert len(calls) == 1
     assert len(calls[0][1]) == 1
     assert calls[0][1][0].size == (80, 120)
+
+
+def test_cloud_main_image_reads_white_label_from_resized_full_image(monkeypatch, tmp_path: Path) -> None:
+    image_path = tmp_path / "002303.jpg"
+    Image.new("RGB", (4000, 3000), "white").save(image_path)
+    calls = []
+
+    def fake_call(config, prompt, images):
+        calls.append((prompt, images))
+        return _response({"name": "P420"})
+
+    monkeypatch.setattr(cloud_recognition, "_call_openai_compatible_vision", fake_call)
+
+    name = recognize_main_image_name_with_cloud(image_path, _config())
+
+    assert name == "P420"
+    assert len(calls) == 1
+    assert calls[0][0] == cloud_recognition.MAIN_IMAGE_NAME_PROMPT
+    assert calls[0][1][0].size == (2048, 1536)
+    assert "anywhere in the full image" in cloud_recognition.MAIN_IMAGE_NAME_PROMPT
+    assert "ruler numbers" in cloud_recognition.MAIN_IMAGE_NAME_PROMPT

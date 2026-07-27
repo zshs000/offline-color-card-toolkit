@@ -168,3 +168,30 @@ def test_crop_main_images_crops_from_image_center_not_ocr_text_position(tmp_path
     with Image.open(results[0].output_path) as cropped:
         assert cropped.size == (1000, 1000)
         assert cropped.getpixel((0, 0)) == (0, 0, 255)
+
+
+def test_crop_main_images_keeps_top_and_left_rulers_when_detected(tmp_path: Path) -> None:
+    image_path = tmp_path / "measured-main.png"
+    image = Image.new("RGB", (1600, 1400), "white")
+    pixels = image.load()
+    for x in range(120, image.width):
+        for y in range(100, image.height):
+            pixels[x, y] = (0, 0, 255)
+    image.save(image_path, dpi=(254, 254))
+    output_dir = tmp_path / "cropped"
+
+    results = crop_main_images(
+        [image_path],
+        output_dir,
+        None,
+        crop_size_cm=10,
+        name_recognizer=lambda path: "P420",
+    )
+
+    assert results[0].output_path == output_dir / "P420.png"
+    assert results[0].warnings == []
+    with Image.open(results[0].output_path) as cropped:
+        assert abs(cropped.width - 1120) <= 2
+        assert abs(cropped.height - 1100) <= 2
+        assert cropped.getpixel((20, 200)) == (255, 255, 255)
+        assert cropped.getpixel((200, 200)) == (0, 0, 255)
