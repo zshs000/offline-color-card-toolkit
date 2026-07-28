@@ -15,7 +15,8 @@ from color_card_toolkit.core.ocr_engine import OcrEngine
 
 DEFAULT_DPI = 300
 RULER_DETECTION_MAX_SIZE = 1500
-RULER_EDGE_MIN_CONTRAST = 20.0
+RULER_PROFILE_MIN_CONTRAST = 6.0
+RULER_LINE_MIN_CONTRAST = 5.0
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _OUTPUT_PATH_LOCK = threading.Lock()
 
@@ -189,13 +190,28 @@ def _find_ruler_origin(image: Image.Image) -> tuple[int, int] | None:
 
     x_edges = np.abs(np.diff(x_profile[x_start:x_end]))
     y_edges = np.abs(np.diff(y_profile[y_start:y_end]))
-    if x_edges.max(initial=0) < RULER_EDGE_MIN_CONTRAST:
+    if x_edges.max(initial=0) < RULER_PROFILE_MIN_CONTRAST:
         return None
-    if y_edges.max(initial=0) < RULER_EDGE_MIN_CONTRAST:
+    if y_edges.max(initial=0) < RULER_PROFILE_MIN_CONTRAST:
         return None
 
+    horizontal_gradient = np.abs(np.diff(gray, axis=1))
+    vertical_gradient = np.abs(np.diff(gray, axis=0))
     origin_x = x_start + int(np.argmax(x_edges)) + 1
     origin_y = y_start + int(np.argmax(y_edges)) + 1
+    x_line_strength = horizontal_gradient[
+        int(analysis_height * 0.12) : int(analysis_height * 0.90),
+        max(0, origin_x - 2) : origin_x + 2,
+    ].mean()
+    y_line_strength = vertical_gradient[
+        max(0, origin_y - 2) : origin_y + 2,
+        int(analysis_width * 0.12) : int(analysis_width * 0.90),
+    ].mean()
+    if x_line_strength < RULER_LINE_MIN_CONTRAST:
+        return None
+    if y_line_strength < RULER_LINE_MIN_CONTRAST:
+        return None
+
     return (
         round(origin_x / scale),
         round(origin_y / scale),
