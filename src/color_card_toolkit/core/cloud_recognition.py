@@ -192,6 +192,17 @@ def recognize_vertical_image_with_cloud(image_path: str | Path, config: CloudVis
 
 
 def recognize_main_image_name_with_cloud(image_path: str | Path, config: CloudVisionConfig) -> str:
+    result = recognize_main_image_name_result_with_cloud(image_path, config)
+    if not result.raw_name:
+        message = result.warnings[-1] if result.warnings else "cloud response did not contain a readable main-image name"
+        raise CloudRecognitionError(message)
+    return result.raw_name
+
+
+def recognize_main_image_name_result_with_cloud(
+    image_path: str | Path,
+    config: CloudVisionConfig,
+) -> ImageRecognitionResult:
     path = Path(image_path)
     if not config.enabled:
         raise CloudRecognitionError("cloud recognition config is incomplete")
@@ -201,11 +212,28 @@ def recognize_main_image_name_with_cloud(image_path: str | Path, config: CloudVi
         MAIN_IMAGE_NAME_PROMPT,
         [_load_main_image_for_cloud(path)],
     )
-    payload = _parse_json_object(response.content_text)
-    name = _normalize_cloud_name(str(payload.get("name") or ""))
+    parse_error = ""
+    try:
+        payload = _parse_json_object(response.content_text)
+        name = _normalize_cloud_name(str(payload.get("name") or ""))
+    except Exception as exc:
+        name = ""
+        parse_error = str(exc)
+
+    result = _result_from_payload(
+        path,
+        {"raw_name": name, "base_name": name, "codes": []},
+        source="cloud_main_image",
+        retry_count=0,
+        usage=response.usage,
+        elapsed_seconds=response.elapsed_seconds,
+        config=config,
+    )
+    if parse_error:
+        result.warnings.append(f"云端返回无法解析：{parse_error}")
     if not name:
-        raise CloudRecognitionError("cloud response did not contain a readable main-image name")
-    return name
+        result.warnings.append("cloud response did not contain a readable main-image name")
+    return result
 
 
 def _call_openai_compatible_vision(

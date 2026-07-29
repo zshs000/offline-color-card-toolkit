@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, JpegImagePlugin
 
 import color_card_toolkit.core.image_rename as image_rename_module
 from color_card_toolkit.core.image_rename import (
@@ -148,6 +148,31 @@ def test_crop_main_images_uses_image_dpi_to_crop_requested_centimeters(tmp_path:
     with Image.open(results[0].output_path) as cropped:
         assert cropped.size == (1000, 1000)
         assert cropped.format == "JPEG"
+
+
+def test_crop_main_images_preserves_source_jpeg_compression(tmp_path: Path) -> None:
+    image_path = tmp_path / "main.jpg"
+    Image.new("RGB", (1600, 1400), "blue").save(
+        image_path,
+        dpi=(254, 254),
+        quality=84,
+        subsampling=2,
+    )
+    with Image.open(image_path) as source:
+        source_qtables = source.quantization
+        source_sampling = JpegImagePlugin.get_sampling(source)
+
+    results = crop_main_images(
+        [image_path],
+        tmp_path / "cropped",
+        FakeOcrEngine({str(image_path): [block("Main01", 100, 120)]}),
+        crop_size_cm=10,
+    )
+
+    with Image.open(results[0].output_path) as cropped:
+        assert cropped.size == (1000, 1000)
+        assert cropped.quantization == source_qtables
+        assert JpegImagePlugin.get_sampling(cropped) == source_sampling
 
 
 def test_crop_main_images_crops_from_image_center_not_ocr_text_position(tmp_path: Path) -> None:

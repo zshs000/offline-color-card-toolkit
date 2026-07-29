@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
@@ -21,9 +23,15 @@ from PySide6.QtWidgets import (
 
 from color_card_toolkit.core.cloud_recognition import (
     CloudVisionConfig,
-    recognize_main_image_name_with_cloud,
+    recognize_main_image_name_result_with_cloud,
 )
-from color_card_toolkit.core.image_rename import ImageProcessResult, crop_main_images
+from color_card_toolkit.core.image_rename import (
+    ImageProcessResult,
+    crop_main_images,
+    rename_processed_image,
+)
+from color_card_toolkit.core.models import ImageRecognitionResult
+from color_card_toolkit.core.recognition_logging import summarize_api_usage, write_recognition_log
 from color_card_toolkit.core.recognition_settings import (
     RecognitionSettings,
     load_recognition_settings,
@@ -32,12 +40,35 @@ from color_card_toolkit.core.recognition_settings import (
 from color_card_toolkit.ui.batch_worker import run_batch_task
 
 
+MAX_CLOUD_RETRY_ROUNDS = 3
+
+
+@dataclass
+class _MainImageWorkItem:
+    source_path: Path
+    image_result: ImageProcessResult
+    attempts: list[ImageRecognitionResult]
+    recognition_error: str = ""
+    retryable: bool = False
+
+    @property
+    def name(self) -> str:
+        return self.source_path.name
+
+
 class MainImageCropPage(QWidget):
     def __init__(self, on_back) -> None:
         super().__init__()
         self._on_back = on_back
         self._image_paths: list[Path] = []
         self._batch_controller = None
+        self._work_items: list[_MainImageWorkItem] = []
+        self._active_cloud_config: CloudVisionConfig | None = None
+        self._crop_output_folder: Path | None = None
+        self._crop_failures: list[str] = []
+        self._crop_failed_count = 0
+        self._retry_round = 0
+        self._recognition_started_at: datetime | None = None
         self._recognition_settings = load_recognition_settings()
         self._build_ui()
 
@@ -127,33 +158,47 @@ class MainImageCropPage(QWidget):
             return
 
         self._set_processing(True)
-        failures: list[str] = []
+        self._work_items = []
+        self._active_cloud_config = cloud_config
+        self._crop_output_folder = output_folder
+        self._crop_failures = []
+        self._crop_failed_count = 0
+        self._retry_round = 0
+        self._recognition_started_at = datetime.now()
 
-        def process(path: Path) -> ImageProcessResult:
+        def process(path: Path) -> _MainImageWorkItem:
+            attempt, recognition_error = _recognize_main_image_attempt(path, cloud_config, retry_count=0)
+
+            def recognize_name(_source: Path) -> str:
+                if recognition_error:
+                    raise RuntimeError(recognition_error)
+                return attempt.raw_name
+
             results = crop_main_images(
                 [path],
                 output_folder,
                 None,
                 crop_size_cm=crop_size_cm,
-                name_recognizer=lambda source: recognize_main_image_name_with_cloud(source, cloud_config),
+                name_recognizer=recognize_name,
             )
             if not results:
                 raise RuntimeError("未生成输出文件")
-            return results[0]
+            return _MainImageWorkItem(
+                source_path=path,
+                image_result=results[0],
+                attempts=[attempt],
+                recognition_error=recognition_error,
+                retryable=bool(recognition_error),
+            )
 
         def item_failed(index: int, label: str, message: str) -> None:
-            failures.append(f"{label}：{message}")
+            self._crop_failures.append(f"{label}：{message}")
 
         self._batch_controller = run_batch_task(
             self._image_paths,
             process,
             on_progress=self._on_crop_progress,
-            on_finished=lambda results, failed_count: self._on_crop_finished(
-                results,
-                failed_count,
-                output_folder,
-                failures,
-            ),
+            on_finished=self._on_initial_crop_finished,
             on_failed=self._on_crop_failed,
             on_item_failed=item_failed,
             max_workers=2,
@@ -163,33 +208,147 @@ class MainImageCropPage(QWidget):
     def _on_crop_progress(self, current: int, total: int, label: str) -> None:
         self.image_summary.setText(f"正在截图 {current}/{total}：{label}")
 
-    def _on_crop_finished(
-        self,
-        results: list[ImageProcessResult],
-        failed_count: int,
-        output_folder: Path,
-        failures: list[str],
-    ) -> None:
+    def _on_initial_crop_finished(self, results: list[_MainImageWorkItem], failed_count: int) -> None:
+        self._batch_controller = None
+        self._work_items = list(results)
+        self._crop_failed_count = failed_count
+        self._continue_retry_or_finish()
+
+    def _continue_retry_or_finish(self) -> None:
+        pending = [item for item in self._work_items if item.retryable and item.recognition_error]
+        if pending and self._retry_round < MAX_CLOUD_RETRY_ROUNDS:
+            self._start_retry_round(pending)
+            return
+        self._finish_crop()
+
+    def _start_retry_round(self, pending: list[_MainImageWorkItem]) -> None:
+        cloud_config = self._active_cloud_config
+        if cloud_config is None:
+            self._finish_crop()
+            return
+        self._retry_round += 1
+        retry_round = self._retry_round
+        self.image_summary.setText(
+            f"正在准备第 {retry_round}/{MAX_CLOUD_RETRY_ROUNDS} 轮重试，共 {len(pending)} 张"
+        )
+
+        def process(item: _MainImageWorkItem) -> _MainImageWorkItem:
+            attempt, recognition_error = _recognize_main_image_attempt(
+                item.source_path,
+                cloud_config,
+                retry_count=retry_round,
+            )
+            attempts = [*item.attempts, attempt]
+            if recognition_error:
+                return _MainImageWorkItem(
+                    item.source_path,
+                    item.image_result,
+                    attempts,
+                    recognition_error,
+                    True,
+                )
+            try:
+                renamed = rename_processed_image(item.image_result, attempt.raw_name)
+            except Exception as exc:
+                return _MainImageWorkItem(
+                    item.source_path,
+                    item.image_result,
+                    attempts,
+                    f"识别成功但改名失败：{exc}",
+                    False,
+                )
+            return _MainImageWorkItem(item.source_path, renamed, attempts)
+
+        self._batch_controller = run_batch_task(
+            pending,
+            process,
+            on_progress=lambda current, total, label: self.image_summary.setText(
+                f"第 {retry_round}/{MAX_CLOUD_RETRY_ROUNDS} 轮重试 {current}/{total}：{label}"
+            ),
+            on_finished=self._on_retry_round_finished,
+            on_failed=self._on_crop_failed,
+            max_workers=2,
+            parent=self,
+        )
+
+    def _on_retry_round_finished(self, results: list[_MainImageWorkItem], failed_count: int) -> None:
+        self._batch_controller = None
+        updates = {item.source_path: item for item in results}
+        self._work_items = [updates.get(item.source_path, item) for item in self._work_items]
+        if failed_count:
+            self._crop_failed_count += failed_count
+        self._continue_retry_or_finish()
+
+    def _finish_crop(self) -> None:
         self._batch_controller = None
         self._set_processing(False)
-        success_count = len(results)
-        self._clear_selected_images()
+        output_folder = self._crop_output_folder or self._default_output_folder()
+        image_results = [item.image_result for item in self._work_items]
+        api_results = [attempt for item in self._work_items for attempt in item.attempts]
+        recognition_failures = [item for item in self._work_items if item.recognition_error]
+        success_count = len(image_results)
+        finished_at = datetime.now()
+        log_path = None
+        if self._active_cloud_config is not None:
+            try:
+                log_path = write_recognition_log(
+                    api_results,
+                    failed_count=self._crop_failed_count + len(recognition_failures),
+                    cloud_config=self._active_cloud_config,
+                    started_at=self._recognition_started_at or finished_at,
+                    finished_at=finished_at,
+                )
+            except Exception as exc:
+                self._crop_failures.append(f"日志写入失败：{exc}")
+
+        usage = summarize_api_usage(api_results)
         warnings = [
             f"{result.source_path.name}：{warning}"
-            for result in results
+            for result in image_results
             for warning in result.warnings
         ]
-        if failed_count or warnings:
-            details = failures + warnings
-            detail = "\n".join(details[:5])
-            suffix = f"\n\n明细：\n{detail}" if detail else ""
+        message = (
+            f"已保存 {success_count} 张图片到：\n{output_folder}\n\n"
+            f"输入 Token：{usage['prompt_tokens']:,}\n"
+            f"输出 Token：{usage['completion_tokens']:,}\n"
+            f"总 Token：{usage['total_tokens']:,}\n"
+            f"预估费用：{usage['estimated_cost_rmb']:.6f} 元"
+        )
+        if self._active_cloud_config is not None:
+            message += (
+                "\n计价参考："
+                f"输入 {self._active_cloud_config.input_price_per_million_tokens:g} 元/百万 Token，"
+                f"输出 {self._active_cloud_config.output_price_per_million_tokens:g} 元/百万 Token"
+            )
+        if log_path is not None:
+            message += f"\nToken 日志：{log_path}"
+
+        if recognition_failures:
+            names = "\n".join(
+                f"{item.source_path.name}：{item.recognition_error}"
+                for item in recognition_failures[:10]
+            )
+            extra = len(recognition_failures) - 10
+            if extra > 0:
+                names += f"\n……另有 {extra} 张"
+            message += (
+                f"\n\n自动重试 {MAX_CLOUD_RETRY_ROUNDS} 次后仍有 "
+                f"{len(recognition_failures)} 张名称识别失败，已保留原文件名：\n{names}\n\n请检查网络或云端配置。"
+            )
+
+        details = self._crop_failures + warnings
+        if details:
+            message += f"\n\n其他提示：\n" + "\n".join(details[:5])
+
+        self._clear_selected_images()
+        if self._crop_failed_count or recognition_failures or details:
             QMessageBox.warning(
                 self,
                 "截图完成（有提示）",
-                f"已保存 {success_count} 张图片到：\n{output_folder}\n\n失败 {failed_count} 张，提示 {len(warnings)} 条。{suffix}",
+                message,
             )
             return
-        QMessageBox.information(self, "截图完成", f"已保存 {success_count} 张图片到：\n{output_folder}")
+        QMessageBox.information(self, "截图完成", message)
 
     def _on_crop_failed(self, message: str) -> None:
         self._batch_controller = None
@@ -263,3 +422,35 @@ class MainImageCropPage(QWidget):
             save_recognition_settings(self._recognition_settings)
         except Exception as exc:
             QMessageBox.warning(self, "设置保存失败", str(exc))
+
+
+def _recognize_main_image_attempt(
+    path: Path,
+    config: CloudVisionConfig,
+    *,
+    retry_count: int,
+) -> tuple[ImageRecognitionResult, str]:
+    try:
+        result = recognize_main_image_name_result_with_cloud(path, config)
+    except Exception as exc:
+        message = str(exc)
+        return (
+            ImageRecognitionResult(
+                image_path=path,
+                raw_name="",
+                base_name=path.stem,
+                sequence=1,
+                color_codes=[],
+                warnings=[message],
+                recognition_source="cloud_main_image_failed",
+                api_retry_count=retry_count,
+                api_model=config.model,
+            ),
+            message,
+        )
+
+    result.api_retry_count = retry_count
+    if result.raw_name:
+        return result, ""
+    message = result.warnings[-1] if result.warnings else "云端未返回可识别名称"
+    return result, message

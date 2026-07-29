@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 import color_card_toolkit.ui.main_image_crop_page as main_crop_module
 import color_card_toolkit.ui.scan_rename_page as scan_rename_module
 from color_card_toolkit.core.image_rename import ImageProcessResult
+from color_card_toolkit.core.models import ImageRecognitionResult
 from color_card_toolkit.core.recognition_settings import RecognitionSettings
 from color_card_toolkit.ui.main_window import MainWindow
 from color_card_toolkit.ui.main_image_crop_page import MainImageCropPage
@@ -115,8 +116,8 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
 
     monkeypatch.setattr(
         main_crop_module,
-        "recognize_main_image_name_with_cloud",
-        lambda path, config: "Main01",
+        "recognize_main_image_name_result_with_cloud",
+        lambda path, config: _cloud_name_result(path, "Main01"),
     )
     monkeypatch.setattr(main_crop_module, "crop_main_images", fake_crop)
     monkeypatch.setattr(
@@ -142,6 +143,94 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     assert captured["recognized_name"] == "Main01"
 
 
+def test_main_image_crop_retries_only_failed_names_three_times(monkeypatch, tmp_path: Path) -> None:
+    _app()
+    page = MainImageCropPage(on_back=lambda: None)
+    sources = [tmp_path / "recover.jpg", tmp_path / "never.jpg", tmp_path / "first-ok.jpg"]
+    for source in sources:
+        source.write_bytes(b"source")
+    output_dir = tmp_path / "cropped"
+    output_dir.mkdir()
+    page.output_folder_edit.setText(str(output_dir))
+    page._image_paths = sources
+    page._recognition_settings = RecognitionSettings(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="qwen3.7-plus",
+    )
+    calls = {source.name: 0 for source in sources}
+    shown: dict[str, str] = {}
+
+    def fake_recognize(path, config):
+        calls[path.name] += 1
+        if path.name == "recover.jpg" and calls[path.name] == 1:
+            raise RuntimeError("The write operation timed out")
+        if path.name == "never.jpg":
+            raise RuntimeError("The write operation timed out")
+        return _cloud_name_result(path, f"云端-{path.stem}", prompt_tokens=100, completion_tokens=10)
+
+    def fake_crop(image_paths, output_dir, ocr_engine, *, crop_size_cm, name_recognizer):
+        source = image_paths[0]
+        warnings = []
+        try:
+            name = name_recognizer(source)
+        except Exception as exc:
+            name = source.stem
+            warnings = [f"云端名称识别失败：{exc}", "名称识别为空，已使用原文件名"]
+        output = Path(output_dir) / f"{name}.jpg"
+        output.write_bytes(b"cropped")
+        return [ImageProcessResult(source, output, name, warnings)]
+
+    monkeypatch.setattr(main_crop_module, "recognize_main_image_name_result_with_cloud", fake_recognize)
+    monkeypatch.setattr(main_crop_module, "crop_main_images", fake_crop)
+    monkeypatch.setattr(
+        main_crop_module,
+        "run_batch_task",
+        lambda *args, **kwargs: _run_batch_task_immediately(*args, **kwargs),
+    )
+    monkeypatch.setattr(main_crop_module, "write_recognition_log", lambda *args, **kwargs: tmp_path / "usage.json")
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, title, message: shown.update(title=title, message=message) or QMessageBox.Ok,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: QMessageBox.Ok)
+
+    page._confirm_crop()
+
+    assert calls == {"recover.jpg": 2, "never.jpg": 4, "first-ok.jpg": 1}
+    assert (output_dir / "云端-recover.jpg").exists()
+    assert (output_dir / "never.jpg").exists()
+    assert (output_dir / "云端-first-ok.jpg").exists()
+    assert "自动重试 3 次后仍有 1 张名称识别失败" in shown["message"]
+    assert "never.jpg" in shown["message"]
+    assert "输入 Token：200" in shown["message"]
+    assert "输出 Token：20" in shown["message"]
+
+
+def _cloud_name_result(
+    path: Path,
+    name: str,
+    *,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+) -> ImageRecognitionResult:
+    return ImageRecognitionResult(
+        image_path=path,
+        raw_name=name,
+        base_name=name,
+        sequence=1,
+        color_codes=[],
+        recognition_source="cloud_main_image",
+        api_prompt_tokens=prompt_tokens,
+        api_completion_tokens=completion_tokens,
+        api_total_tokens=prompt_tokens + completion_tokens,
+        api_estimated_cost_rmb=(prompt_tokens / 1_000_000 * 1.2)
+        + (completion_tokens / 1_000_000 * 7.2),
+        api_model="qwen3.7-plus",
+    )
+
+
 def _run_batch_task_immediately(
     items,
     processor,
@@ -159,13 +248,14 @@ def _run_batch_task_immediately(
     results = []
     failed_count = 0
     for index, item in enumerate(items):
-        on_progress(index + 1, len(items), Path(item).name)
+        label = getattr(item, "name", None) or Path(item).name
+        on_progress(index + 1, len(items), str(label))
         try:
             results.append(processor(item))
         except Exception as exc:
             failed_count += 1
             if on_item_failed is not None:
-                on_item_failed(index, Path(item).name, str(exc))
+                on_item_failed(index, str(label), str(exc))
     on_finished(results, failed_count)
     return object()
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, JpegImagePlugin
 
 from color_card_toolkit.core.models import OcrBlock
 from color_card_toolkit.core.ocr_engine import OcrEngine
@@ -136,9 +136,40 @@ def crop_main_images(
     return results
 
 
+def rename_processed_image(result: ImageProcessResult, recognized_name: str) -> ImageProcessResult:
+    clean_name = _safe_filename(recognized_name)
+    if not clean_name:
+        raise ValueError("识别名称为空")
+
+    current_path = result.output_path
+    desired_path = current_path.with_name(f"{clean_name}{current_path.suffix}")
+    with _OUTPUT_PATH_LOCK:
+        if desired_path == current_path:
+            output_path = current_path
+        else:
+            output_path = unique_output_path(current_path.parent, clean_name, current_path.suffix)
+            current_path.replace(output_path)
+
+    warnings = [
+        warning
+        for warning in result.warnings
+        if not warning.startswith("云端名称识别失败")
+        and warning != "名称识别为空，已使用原文件名"
+    ]
+    return ImageProcessResult(result.source_path, output_path, clean_name, warnings)
+
+
 def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> bool:
     with Image.open(source) as image:
         source_format = image.format
+        jpeg_save_kwargs = {}
+        if (source_format or "").upper() in {"JPEG", "JPG"}:
+            quantization = getattr(image, "quantization", None)
+            if quantization:
+                jpeg_save_kwargs = {
+                    "qtables": quantization,
+                    "subsampling": JpegImagePlugin.get_sampling(image),
+                }
         image = ImageOps.exif_transpose(image)
         dpi_x, dpi_y = _image_dpi(image)
         crop_width = min(_cm_to_pixels(crop_size_cm, dpi_x), image.width)
@@ -158,10 +189,7 @@ def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> bool:
             )
         cropped = image.crop(crop_box)
 
-        save_kwargs = {}
-        if (source_format or "").upper() in {"JPEG", "JPG"}:
-            save_kwargs = {"quality": 100, "subsampling": 0}
-        cropped.save(output_path, format=source_format, **save_kwargs)
+        cropped.save(output_path, format=source_format, **jpeg_save_kwargs)
         return ruler_origin is not None
 
 
