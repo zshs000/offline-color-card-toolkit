@@ -24,7 +24,12 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # ultralytics 训练/基准/画图才用到的重组件，推理路径不碰；
+        # 排除可减少产物体积与打包时间（matplotlib 因顶层硬依赖保留）。
+        "polars",
+        "networkx",
+    ],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
