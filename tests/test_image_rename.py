@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -220,3 +221,94 @@ def test_crop_main_images_keeps_top_and_left_rulers_when_detected(tmp_path: Path
         assert abs(cropped.height - 1100) <= 2
         assert cropped.getpixel((20, 200)) == (255, 255, 255)
         assert cropped.getpixel((200, 200)) == (0, 0, 255)
+
+
+def test_crop_main_images_uses_tick_ruler_origin_when_detected(tmp_path: Path) -> None:
+    width, height = 5600, 5200
+    origin_x, origin_y = 300, 250
+    spacing = 800 / 25.4
+    array = np.full((height, width, 3), 255, dtype=np.uint8)
+    array[:origin_y, :, :] = 200
+    array[:, :origin_x, :] = 200
+    for index in range(156):
+        x0 = round(origin_x + index * spacing)
+        array[30:origin_y, x0 - 1 : x0 + 3, :] = 0
+    for index in range(153):
+        y0 = round(origin_y + index * spacing)
+        array[y0 - 1 : y0 + 3, 30:origin_x, :] = 0
+    image_path = tmp_path / "ruled-main.png"
+    Image.fromarray(array, "RGB").save(image_path, dpi=(800, 800))
+    output_dir = tmp_path / "cropped"
+
+    results = crop_main_images(
+        [image_path],
+        output_dir,
+        None,
+        crop_size_cm=10,
+        name_recognizer=lambda path: "RULER01",
+    )
+
+    assert results[0].output_path == output_dir / "RULER01.png"
+    assert results[0].warnings == []
+    with Image.open(results[0].output_path) as cropped:
+        assert abs(cropped.width - 3450) <= 2
+        assert abs(cropped.height - 3400) <= 2
+        assert cropped.getpixel((0, 0)) == (200, 200, 200)
+        assert cropped.getpixel((200, 200)) == (200, 200, 200)
+        assert cropped.getpixel((400, 300)) == (255, 255, 255)
+
+
+def _synthetic_ruler_image(ticks: int, tilt_degrees: float = 0.0) -> Image.Image:
+    width, height = 5600, 5200
+    origin_x, origin_y = 300, 250
+    spacing = 800 / 25.4
+    slope = math.tan(math.radians(tilt_degrees))
+    array = np.full((height, width, 3), 255, dtype=np.uint8)
+    array[:origin_y, :, :] = 200
+    array[:, :origin_x, :] = 200
+    for index in range(ticks):
+        x0 = round(origin_x + index * spacing)
+        y_end = round(origin_y + (x0 - origin_x) * slope)
+        array[30:y_end, x0 - 1 : x0 + 3, :] = 0
+    for index in range(ticks):
+        y0 = round(origin_y + index * spacing)
+        x_end = round(origin_x + (y0 - origin_y) * slope)
+        array[y0 - 1 : y0 + 3, 30:x_end, :] = 0
+    return Image.fromarray(array, "RGB")
+
+
+def test_crop_main_images_rotates_tilted_ruler_using_detected_geometry(tmp_path: Path) -> None:
+    image_path = tmp_path / "tilted-ruler.png"
+    _synthetic_ruler_image(ticks=156, tilt_degrees=0.8).save(image_path, dpi=(800, 800))
+    output_dir = tmp_path / "cropped"
+
+    results = crop_main_images(
+        [image_path],
+        output_dir,
+        None,
+        crop_size_cm=10,
+        name_recognizer=lambda path: "TILT01",
+    )
+
+    assert results[0].warnings == []
+    with Image.open(results[0].output_path) as cropped:
+        assert abs(cropped.width - 3454) <= 4
+        assert abs(cropped.height - 3474) <= 4
+
+
+def test_crop_main_images_warns_when_ruler_detection_unhealthy(tmp_path: Path) -> None:
+    image_path = tmp_path / "short-ruler.png"
+    _synthetic_ruler_image(ticks=80).save(image_path, dpi=(800, 800))
+    output_dir = tmp_path / "cropped"
+
+    results = crop_main_images(
+        [image_path],
+        output_dir,
+        None,
+        crop_size_cm=10,
+        name_recognizer=lambda path: "SHORT01",
+    )
+
+    assert results[0].output_path.exists()
+    assert any("标尺刻度检测可靠性偏低" in warning for warning in results[0].warnings)
+

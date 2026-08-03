@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import shutil
 import threading
@@ -12,6 +13,7 @@ from PIL import Image, ImageOps, JpegImagePlugin
 
 from color_card_toolkit.core.models import OcrBlock
 from color_card_toolkit.core.ocr_engine import OcrEngine
+from color_card_toolkit.core.ruler_detection import detect_ruler
 
 DEFAULT_DPI = 300
 RULER_DETECTION_MAX_SIZE = 1500
@@ -27,6 +29,13 @@ class ImageProcessResult:
     output_path: Path
     recognized_name: str
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _RulerCropResult:
+    detected: bool
+    healthy: bool
+    centered: bool
 
 
 def extract_top_left_name(image_path: str | Path, blocks: list[OcrBlock]) -> str:
@@ -128,8 +137,10 @@ def crop_main_images(
 
         with _OUTPUT_PATH_LOCK:
             output_path = unique_output_path(folder, recognized_name, source.suffix)
-            ruler_found = _crop_image(source, output_path, crop_size_cm)
-        if not ruler_found:
+            crop_result = _crop_image(source, output_path, crop_size_cm)
+        if crop_result.detected and not crop_result.healthy:
+            warnings.append("标尺刻度检测可靠性偏低，已按检测结果裁剪，请人工核对")
+        elif not crop_result.detected and crop_result.centered:
             warnings.append("未检测到上方和左侧标尺，已按原有方式从图片中心裁剪")
         results.append(ImageProcessResult(source, output_path, recognized_name, warnings))
 
@@ -159,7 +170,7 @@ def rename_processed_image(result: ImageProcessResult, recognized_name: str) -> 
     return ImageProcessResult(result.source_path, output_path, clean_name, warnings)
 
 
-def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> bool:
+def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> _RulerCropResult:
     with Image.open(source) as image:
         source_format = image.format
         jpeg_save_kwargs = {}
@@ -174,11 +185,40 @@ def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> bool:
         dpi_x, dpi_y = _image_dpi(image)
         crop_width = min(_cm_to_pixels(crop_size_cm, dpi_x), image.width)
         crop_height = min(_cm_to_pixels(crop_size_cm, dpi_y), image.height)
+
+        geometry = detect_ruler(image, (dpi_x, dpi_y))
+        if geometry is not None:
+            rotated = image.rotate(
+                geometry.rotation_degrees,
+                resample=Image.Resampling.BICUBIC,
+                expand=True,
+                fillcolor=(255, 255, 255),
+            )
+            origin_x, origin_y = _transform_point(
+                np.asarray(geometry.origin, dtype=np.float64),
+                source_size=image.size,
+                target_size=rotated.size,
+                angle_degrees=geometry.rotation_degrees,
+            )
+            crop_box = (
+                0,
+                0,
+                min(rotated.width, round(origin_x + crop_width)),
+                min(rotated.height, round(origin_y + crop_height)),
+            )
+            rotated.crop(crop_box).save(output_path, format=source_format, **jpeg_save_kwargs)
+            return _RulerCropResult(
+                detected=True,
+                healthy=geometry.healthy,
+                centered=False,
+            )
+
         ruler_origin = _find_ruler_origin(image)
         if ruler_origin is None:
             left = max(0, (image.width - crop_width) // 2)
             top = max(0, (image.height - crop_height) // 2)
             crop_box = (left, top, left + crop_width, top + crop_height)
+            centered = True
         else:
             origin_x, origin_y = ruler_origin
             crop_box = (
@@ -187,10 +227,30 @@ def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> bool:
                 min(image.width, origin_x + crop_width),
                 min(image.height, origin_y + crop_height),
             )
-        cropped = image.crop(crop_box)
+            centered = False
+        image.crop(crop_box).save(output_path, format=source_format, **jpeg_save_kwargs)
+        return _RulerCropResult(detected=False, healthy=False, centered=centered)
 
-        cropped.save(output_path, format=source_format, **jpeg_save_kwargs)
-        return ruler_origin is not None
+
+def _transform_point(
+    point: np.ndarray,
+    *,
+    source_size: tuple[int, int],
+    target_size: tuple[int, int],
+    angle_degrees: float,
+) -> tuple[float, float]:
+    """把原图坐标映射到 rotate(angle, expand=True) 之后的坐标系。"""
+    angle = math.radians(angle_degrees)
+    delta_x = point[0] - source_size[0] / 2
+    delta_y = point[1] - source_size[1] / 2
+    transformed_x = (
+        math.cos(angle) * delta_x + math.sin(angle) * delta_y + target_size[0] / 2
+    )
+    transformed_y = (
+        -math.sin(angle) * delta_x + math.cos(angle) * delta_y + target_size[1] / 2
+    )
+    return transformed_x, transformed_y
+
 
 
 def _find_ruler_origin(image: Image.Image) -> tuple[int, int] | None:
