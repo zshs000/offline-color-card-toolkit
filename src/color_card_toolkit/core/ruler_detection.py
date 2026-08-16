@@ -278,6 +278,59 @@ def _tick_spacing(
     return float(np.median(usable))
 
 
+def _observed_tick_spacing(
+    points: np.ndarray,
+    inliers: np.ndarray,
+    *,
+    primary: int,
+) -> float:
+    """Infer the 1 mm tick period directly from detected ruler endpoints."""
+    coordinates = np.sort(points[inliers, primary])
+    coordinates = coordinates[np.r_[True, np.diff(coordinates) > 2.5]]
+    if len(coordinates) < 6:
+        raise RuntimeError("not enough tick coordinates")
+
+    gaps = np.diff(coordinates)
+    maximum_gap = max(8.0, float(coordinates[-1] - coordinates[0]) / 40.0)
+    usable = gaps[(gaps >= 3.0) & (gaps <= maximum_gap)]
+    if len(usable) < 5:
+        raise RuntimeError("not enough adjacent tick gaps")
+
+    best_spacing = None
+    best_score = -math.inf
+    for candidate in np.unique(usable):
+        ratios = usable / candidate
+        multiples = np.rint(ratios)
+        valid = (multiples >= 1) & (multiples <= 3)
+        residuals = np.abs(ratios - multiples)
+        score = float(
+            np.sum(
+                np.where(
+                    valid,
+                    np.exp(-((residuals / 0.12) ** 2)) / np.maximum(multiples, 1),
+                    0.0,
+                )
+            )
+        )
+        if score > best_score:
+            best_score = score
+            best_spacing = float(candidate)
+
+    if best_spacing is None:
+        raise RuntimeError("could not infer tick spacing")
+    ratios = usable / best_spacing
+    multiples = np.rint(ratios)
+    aligned = (
+        (multiples >= 1)
+        & (multiples <= 3)
+        & (np.abs(ratios - multiples) <= 0.20)
+    )
+    estimates = usable[aligned] / multiples[aligned]
+    if len(estimates) < 5:
+        raise RuntimeError("tick spacing is not stable")
+    return float(np.median(estimates))
+
+
 def _fitted_lattice(
     coordinates: np.ndarray,
     expected_spacing: float,
@@ -479,27 +532,41 @@ def detect_ruler(
     )
     gray = np.asarray(analysis, dtype=np.uint8)
 
+    direct = _detect_with_dpi(gray, scale, None)
+    if direct is not None and direct.healthy:
+        return direct
+
+    candidates = []
     if dpi is not None and dpi[0] > 0 and dpi[1] > 0:
-        candidates = [dpi]
-    else:
-        candidates = []
+        candidates.append(dpi)
     candidates.extend((value, value) for value in _DPI_CANDIDATES)
 
     seen = set()
+    results = [direct] if direct is not None else []
     for candidate in candidates:
         if candidate in seen:
             continue
         seen.add(candidate)
         geometry = _detect_with_dpi(gray, scale, candidate)
         if geometry is not None:
-            return geometry
-    return None
+            results.append(geometry)
+    if not results:
+        return None
+    return max(
+        results,
+        key=lambda item: (
+            item.healthy,
+            min(item.top_support, item.left_support),
+            item.top_support + item.left_support,
+            item.top_inlier_ratio + item.left_inlier_ratio,
+        ),
+    )
 
 
 def _detect_with_dpi(
     gray: np.ndarray,
     scale: float,
-    dpi: tuple[int, int],
+    dpi: tuple[int, int] | None,
 ) -> RulerGeometry | None:
     height, width = gray.shape
     coarse = coarse_origin(gray)
@@ -525,16 +592,20 @@ def _detect_with_dpi(
     except RuntimeError:
         return None
 
-    expected_x = float(dpi[0]) / 25.4 * scale
-    expected_y = float(dpi[1]) / 25.4 * scale
     try:
-        spacing_x = _tick_spacing(top_points, top_inliers, primary=0, expected=expected_x) / scale
-        spacing_y = _tick_spacing(left_points, left_inliers, primary=1, expected=expected_y) / scale
+        if dpi is None:
+            expected_x = _observed_tick_spacing(top_points, top_inliers, primary=0)
+            expected_y = _observed_tick_spacing(left_points, left_inliers, primary=1)
+        else:
+            expected_x = float(dpi[0]) / 25.4 * scale
+            expected_y = float(dpi[1]) / 25.4 * scale
+            _tick_spacing(top_points, top_inliers, primary=0, expected=expected_x)
+            _tick_spacing(left_points, left_inliers, primary=1, expected=expected_y)
     except RuntimeError:
         return None
 
     try:
-        _, _, _, top_support, _, _ = _scale_span(
+        _, _, spacing_x, top_support, _, _ = _scale_span(
             gray,
             top_points,
             top_inliers,
@@ -543,7 +614,7 @@ def _detect_with_dpi(
             top=True,
             expected_spacing=expected_x,
         )
-        _, _, _, left_support, _, _ = _scale_span(
+        _, _, spacing_y, left_support, _, _ = _scale_span(
             gray,
             left_points,
             left_inliers,
@@ -553,6 +624,8 @@ def _detect_with_dpi(
             expected_spacing=expected_y,
         )
     except RuntimeError:
+        spacing_x = expected_x
+        spacing_y = expected_y
         top_support = 0
         left_support = 0
 
@@ -560,8 +633,8 @@ def _detect_with_dpi(
     return RulerGeometry(
         origin=(origin[0] / scale, origin[1] / scale),
         rotation_degrees=line_angle(top_direction, horizontal=True),
-        spacing_x=spacing_x,
-        spacing_y=spacing_y,
+        spacing_x=spacing_x / scale,
+        spacing_y=spacing_y / scale,
         top_support=top_support,
         left_support=left_support,
         top_inlier_ratio=float(top_inliers.mean()),
