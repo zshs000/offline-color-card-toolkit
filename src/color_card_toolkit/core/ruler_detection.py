@@ -21,9 +21,9 @@ RANSAC_ITERATIONS = 1500
 RANSAC_INLIER_THRESHOLD = 3.5
 FINAL_INLIER_THRESHOLD = 4.0
 MIN_ENDPOINTS = 12
-CROP_MILLIMETERS = 150
+SUPPORTED_RULER_SPANS_MM = (150, 100)
 HEALTH_MIN_INLIER_RATIO = 0.3
-HEALTH_MIN_SUPPORT = 100
+HEALTH_MIN_SUPPORT_RATIO = 0.9
 _DPI_CANDIDATES = (800, 1200, 300, 600)
 
 
@@ -157,7 +157,7 @@ def tick_endpoints(
         if top:
             if component_height < 5 or component_height < component_width * 1.8:
                 continue
-            if component_width > width * 0.012 or component_height > height * 0.06:
+            if component_width > width * 0.012 or component_height > height * 0.09:
                 continue
             center_x = round(x + component_width / 2 + int(width * 0.015))
             endpoint_y = _local_contrast_endpoint(gray, center_x, coarse_y)
@@ -166,7 +166,7 @@ def tick_endpoints(
         else:
             if component_width < 5 or component_width < component_height * 1.8:
                 continue
-            if component_height > height * 0.012 or component_width > width * 0.06:
+            if component_height > height * 0.012 or component_width > width * 0.09:
                 continue
             center_y = round(y + component_height / 2 + int(height * 0.015))
             endpoint_x = _local_contrast_endpoint_x(gray, center_y, coarse_x)
@@ -412,8 +412,9 @@ def _scale_span(
     line_direction: np.ndarray,
     top: bool,
     expected_spacing: float,
+    span_mm: int,
 ) -> tuple[float, float, float, int, float, float]:
-    """在 150mm 范围内找最优窗口，返回（起点，终点，间距，支撑数，首尾强度）。"""
+    """在指定毫米跨度内找最优窗口，返回（起点，终点，间距，支撑数，首尾强度）。"""
     primary = 0 if top else 1
     size = gray.shape[1] if top else gray.shape[0]
     phase, spacing = _fitted_lattice(
@@ -444,8 +445,8 @@ def _scale_span(
 
     best_start = None
     best_score = -math.inf
-    for start_index in range(minimum_index, maximum_index - CROP_MILLIMETERS + 1):
-        end_index = start_index + CROP_MILLIMETERS
+    for start_index in range(minimum_index, maximum_index - span_mm + 1):
+        end_index = start_index + span_mm
         interval = range(start_index, end_index + 1)
         supported = sum(index in support for index in interval)
         raw_support = sum(support.get(index, 0) for index in interval)
@@ -470,7 +471,7 @@ def _scale_span(
 
     if best_start is None:
         raise RuntimeError("could not find a complete ruler span")
-    best_end = best_start + CROP_MILLIMETERS
+    best_end = best_start + span_mm
     return (
         phase + best_start * spacing,
         phase + best_end * spacing,
@@ -489,6 +490,7 @@ class RulerGeometry:
     rotation_degrees: float
     spacing_x: float
     spacing_y: float
+    span_mm: int
     top_support: int
     left_support: int
     top_inlier_ratio: float
@@ -496,13 +498,14 @@ class RulerGeometry:
 
     @property
     def healthy(self) -> bool:
+        minimum_support = math.ceil((self.span_mm + 1) * HEALTH_MIN_SUPPORT_RATIO)
         return (
             self.spacing_x > 0
             and self.spacing_y > 0
             and self.top_inlier_ratio >= HEALTH_MIN_INLIER_RATIO
             and self.left_inlier_ratio >= HEALTH_MIN_INLIER_RATIO
-            and self.top_support >= HEALTH_MIN_SUPPORT
-            and self.left_support >= HEALTH_MIN_SUPPORT
+            and self.top_support >= minimum_support
+            and self.left_support >= minimum_support
         )
 
 
@@ -519,6 +522,8 @@ def _read_dpi(image: Image.Image) -> tuple[int, int]:
 def detect_ruler(
     image: Image.Image,
     dpi: tuple[int, int] | None = None,
+    *,
+    span_mm: int | None = None,
 ) -> RulerGeometry | None:
     """检测图片中的尺子刻度。
 
@@ -531,8 +536,11 @@ def detect_ruler(
         Image.Resampling.BILINEAR,
     )
     gray = np.asarray(analysis, dtype=np.uint8)
+    spans = (span_mm,) if span_mm is not None else SUPPORTED_RULER_SPANS_MM
+    if any(value <= 0 for value in spans):
+        raise ValueError("ruler span must be positive")
 
-    direct = _detect_with_dpi(gray, scale, None)
+    direct = _detect_with_dpi(gray, scale, None, spans)
     if direct is not None and direct.healthy:
         return direct
 
@@ -547,7 +555,7 @@ def detect_ruler(
         if candidate in seen:
             continue
         seen.add(candidate)
-        geometry = _detect_with_dpi(gray, scale, candidate)
+        geometry = _detect_with_dpi(gray, scale, candidate, spans)
         if geometry is not None:
             results.append(geometry)
     if not results:
@@ -556,7 +564,8 @@ def detect_ruler(
         results,
         key=lambda item: (
             item.healthy,
-            min(item.top_support, item.left_support),
+            item.span_mm,
+            min(item.top_support, item.left_support) / (item.span_mm + 1),
             item.top_support + item.left_support,
             item.top_inlier_ratio + item.left_inlier_ratio,
         ),
@@ -567,6 +576,7 @@ def _detect_with_dpi(
     gray: np.ndarray,
     scale: float,
     dpi: tuple[int, int] | None,
+    spans: tuple[int, ...],
 ) -> RulerGeometry | None:
     height, width = gray.shape
     coarse = coarse_origin(gray)
@@ -604,39 +614,54 @@ def _detect_with_dpi(
     except RuntimeError:
         return None
 
-    try:
-        _, _, spacing_x, top_support, _, _ = _scale_span(
-            gray,
-            top_points,
-            top_inliers,
-            line_point=top_point,
-            line_direction=top_direction,
-            top=True,
-            expected_spacing=expected_x,
-        )
-        _, _, spacing_y, left_support, _, _ = _scale_span(
-            gray,
-            left_points,
-            left_inliers,
-            line_point=left_point,
-            line_direction=left_direction,
-            top=False,
-            expected_spacing=expected_y,
-        )
-    except RuntimeError:
-        spacing_x = expected_x
-        spacing_y = expected_y
-        top_support = 0
-        left_support = 0
-
     origin = intersection((top_point, top_direction), (left_point, left_direction))
-    return RulerGeometry(
-        origin=(origin[0] / scale, origin[1] / scale),
-        rotation_degrees=line_angle(top_direction, horizontal=True),
-        spacing_x=spacing_x / scale,
-        spacing_y=spacing_y / scale,
-        top_support=top_support,
-        left_support=left_support,
-        top_inlier_ratio=float(top_inliers.mean()),
-        left_inlier_ratio=float(left_inliers.mean()),
+    results = []
+    for ruler_span in spans:
+        try:
+            _, _, spacing_x, top_support, _, _ = _scale_span(
+                gray,
+                top_points,
+                top_inliers,
+                line_point=top_point,
+                line_direction=top_direction,
+                top=True,
+                expected_spacing=expected_x,
+                span_mm=ruler_span,
+            )
+            _, _, spacing_y, left_support, _, _ = _scale_span(
+                gray,
+                left_points,
+                left_inliers,
+                line_point=left_point,
+                line_direction=left_direction,
+                top=False,
+                expected_spacing=expected_y,
+                span_mm=ruler_span,
+            )
+        except RuntimeError:
+            spacing_x = expected_x
+            spacing_y = expected_y
+            top_support = 0
+            left_support = 0
+        results.append(
+            RulerGeometry(
+                origin=(origin[0] / scale, origin[1] / scale),
+                rotation_degrees=line_angle(top_direction, horizontal=True),
+                spacing_x=spacing_x / scale,
+                spacing_y=spacing_y / scale,
+                span_mm=ruler_span,
+                top_support=top_support,
+                left_support=left_support,
+                top_inlier_ratio=float(top_inliers.mean()),
+                left_inlier_ratio=float(left_inliers.mean()),
+            )
+        )
+    return max(
+        results,
+        key=lambda item: (
+            item.healthy,
+            item.span_mm,
+            min(item.top_support, item.left_support) / (item.span_mm + 1),
+            item.top_support + item.left_support,
+        ),
     )

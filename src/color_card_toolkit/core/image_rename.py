@@ -186,7 +186,11 @@ def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> _RulerCro
         crop_width = min(_cm_to_pixels(crop_size_cm, dpi_x), image.width)
         crop_height = min(_cm_to_pixels(crop_size_cm, dpi_y), image.height)
 
-        geometry = detect_ruler(image, (dpi_x, dpi_y))
+        geometry = detect_ruler(
+            image,
+            (dpi_x, dpi_y),
+            span_mm=crop_size_cm * 10,
+        )
         if geometry is not None:
             rotated = image.rotate(
                 geometry.rotation_degrees,

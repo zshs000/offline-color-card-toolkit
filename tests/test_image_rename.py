@@ -17,6 +17,7 @@ from color_card_toolkit.core.image_rename import (
 )
 from color_card_toolkit.core.models import OcrBlock
 from color_card_toolkit.core.ocr_engine import FakeOcrEngine
+from color_card_toolkit.core.ruler_detection import detect_ruler
 
 
 def block(text: str, x: float, y: float, w: float = 80, h: float = 30) -> OcrBlock:
@@ -277,6 +278,35 @@ def _synthetic_ruler_image(ticks: int, tilt_degrees: float = 0.0) -> Image.Image
     return Image.fromarray(array, "RGB")
 
 
+def _crop_synthetic_ruler_to_span(span_mm: int) -> Image.Image:
+    spacing = 800 / 25.4
+    image = _synthetic_ruler_image(ticks=156)
+    return image.crop(
+        (
+            0,
+            0,
+            round(300 + span_mm * spacing),
+            round(250 + span_mm * spacing),
+        )
+    )
+
+
+def test_detect_ruler_identifies_100mm_output_automatically() -> None:
+    geometry = detect_ruler(_crop_synthetic_ruler_to_span(100))
+
+    assert geometry is not None
+    assert geometry.healthy
+    assert geometry.span_mm == 100
+
+
+def test_detect_ruler_identifies_150mm_output_automatically() -> None:
+    geometry = detect_ruler(_crop_synthetic_ruler_to_span(150))
+
+    assert geometry is not None
+    assert geometry.healthy
+    assert geometry.span_mm == 150
+
+
 def test_crop_main_images_rotates_tilted_ruler_using_detected_geometry(tmp_path: Path) -> None:
     image_path = tmp_path / "tilted-ruler.png"
     _synthetic_ruler_image(ticks=156, tilt_degrees=0.8).save(image_path, dpi=(800, 800))
@@ -311,4 +341,3 @@ def test_crop_main_images_warns_when_ruler_detection_unhealthy(tmp_path: Path) -
 
     assert results[0].output_path.exists()
     assert any("标尺刻度检测可靠性偏低" in warning for warning in results[0].warnings)
-
