@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -29,7 +28,6 @@ from PySide6.QtWidgets import (
 from color_card_toolkit.core.cloud_recognition import CloudVisionConfig
 from color_card_toolkit.core.grouping import group_recognition_results, parse_group_name
 from color_card_toolkit.core.models import ImageRecognitionResult, normalize_code_list
-from color_card_toolkit.core.ocr_engine import RapidOcrEngine
 from color_card_toolkit.core.recognition_logging import concurrency_ratio, summarize_api_usage, write_recognition_log
 from color_card_toolkit.core.recognition_settings import (
     RecognitionSettings,
@@ -182,27 +180,18 @@ class StackToFlatPage(QWidget):
         self._results = []
         self._set_processing(True)
         cloud_config = self._cloud_config_from_settings()
-        if cloud_config is False:
+        if not isinstance(cloud_config, CloudVisionConfig):
             self._set_processing(False)
             return
         self._recognition_started_at = datetime.now()
         self._recognition_finished_at = None
         self._active_cloud_config = cloud_config if isinstance(cloud_config, CloudVisionConfig) else None
 
-        engine_holder = threading.local()
-
         def process(path: Path) -> ImageRecognitionResult:
             try:
-                if not hasattr(engine_holder, "engine"):
-                    engine_holder.engine = RapidOcrEngine(
-                        intra_op_num_threads=1,
-                        inter_op_num_threads=1,
-                    )
-                if cloud_config:
-                    return recognize_image(path, engine_holder.engine, cloud_config=cloud_config)
-                return recognize_image(path, engine_holder.engine)
+                return recognize_image(path, cloud_config=cloud_config)
             except Exception as exc:
-                return _manual_result_for_image(path, f"OCR 识别失败：{exc}。已使用文件名作为组名，请手动修正。")
+                return _manual_result_for_image(path, f"云端识别失败：{exc}。请手动修正识别结果。")
 
         self._batch_controller = run_batch_task(
             self._image_paths,
@@ -213,7 +202,7 @@ class StackToFlatPage(QWidget):
                 failed_count + _manual_failure_count(results),
             ),
             on_failed=self._on_recognition_failed,
-            max_workers=cloud_config.concurrency if isinstance(cloud_config, CloudVisionConfig) else 2,
+            max_workers=cloud_config.concurrency,
             parent=self,
         )
 
@@ -249,7 +238,8 @@ class StackToFlatPage(QWidget):
         api_key = self._recognition_settings.api_key.strip()
         model = self._recognition_settings.model.strip()
         if not any((base_url, api_key, model)):
-            return None
+            QMessageBox.warning(self, "需要云端识别", "叠贴转平贴识别已统一使用云端，请先填写 Base URL、API Key 和 Model。")
+            return False
         if not all((base_url, api_key, model)):
             QMessageBox.warning(self, "云端配置不完整", "Base URL、API Key、Model 必须同时填写。")
             return False
@@ -257,7 +247,6 @@ class StackToFlatPage(QWidget):
             base_url=base_url,
             api_key=api_key,
             model=model,
-            horizontal_use_yolo=self._recognition_settings.horizontal_use_yolo,
             concurrency=self._recognition_settings.cloud_concurrency,
         )
 
@@ -278,10 +267,6 @@ class StackToFlatPage(QWidget):
         form.addWidget(model_edit, 2, 1)
         layout.addLayout(form)
 
-        horizontal_yolo_checkbox = QCheckBox("横版使用 YOLO 裁剪后再云端识别")
-        horizontal_yolo_checkbox.setChecked(self._recognition_settings.horizontal_use_yolo)
-        layout.addWidget(horizontal_yolo_checkbox)
-
         concurrency_spinbox = QSpinBox()
         concurrency_spinbox.setRange(1, 10)
         concurrency_spinbox.setValue(self._recognition_settings.cloud_concurrency)
@@ -291,7 +276,7 @@ class StackToFlatPage(QWidget):
         concurrency_layout.addStretch(1)
         layout.addLayout(concurrency_layout)
 
-        note = QLabel("保存后会写入本地设置文件。关闭横版 YOLO 后，横版会直接整图发送给云端；竖版始终整图云端识别。并发结果会按图片原顺序回填。")
+        note = QLabel("保存后会写入本地设置文件。横版和竖版都会将完整原图发送给云端，并发结果会按图片原顺序回填。")
         note.setWordWrap(True)
         layout.addWidget(note)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -303,7 +288,6 @@ class StackToFlatPage(QWidget):
                 base_url=base_url_edit.text().strip(),
                 api_key=api_key_edit.text().strip(),
                 model=model_edit.text().strip(),
-                horizontal_use_yolo=horizontal_yolo_checkbox.isChecked(),
                 cloud_concurrency=concurrency_spinbox.value(),
                 main_image_ruler_search_ratio=self._recognition_settings.main_image_ruler_search_ratio,
             )
@@ -412,7 +396,7 @@ class StackToFlatPage(QWidget):
 
         selected_paths = [self._results[row].image_path for row in selected_rows]
         cloud_config = self._cloud_config_from_settings()
-        if cloud_config is False:
+        if not isinstance(cloud_config, CloudVisionConfig):
             return
 
         self._set_processing(True)
@@ -420,20 +404,11 @@ class StackToFlatPage(QWidget):
         self._recognition_finished_at = None
         self._active_cloud_config = cloud_config if isinstance(cloud_config, CloudVisionConfig) else None
 
-        engine_holder = threading.local()
-
         def process(path: Path) -> ImageRecognitionResult:
             try:
-                if not hasattr(engine_holder, "engine"):
-                    engine_holder.engine = RapidOcrEngine(
-                        intra_op_num_threads=1,
-                        inter_op_num_threads=1,
-                    )
-                if cloud_config:
-                    return recognize_image(path, engine_holder.engine, cloud_config=cloud_config)
-                return recognize_image(path, engine_holder.engine)
+                return recognize_image(path, cloud_config=cloud_config)
             except Exception as exc:
-                return _manual_result_for_image(path, f"OCR 识别失败：{exc}。已使用文件名作为组名，请手动修正。")
+                return _manual_result_for_image(path, f"云端识别失败：{exc}。请手动修正识别结果。")
 
         self._batch_controller = run_batch_task(
             selected_paths,
@@ -444,7 +419,7 @@ class StackToFlatPage(QWidget):
                 failed_count + _manual_failure_count(results),
             ),
             on_failed=self._on_recognition_failed,
-            max_workers=cloud_config.concurrency if isinstance(cloud_config, CloudVisionConfig) else 2,
+            max_workers=cloud_config.concurrency,
             parent=self,
         )
 
@@ -615,16 +590,14 @@ def _manual_failure_count(results: list[ImageRecognitionResult]) -> int:
         1
         for result in results
         if result.recognition_source == "cloud_failed"
-        or any(warning.startswith("OCR 识别失败") for warning in result.warnings)
+        or any(warning.startswith("云端识别失败") for warning in result.warnings)
     )
 
 
 def _cloud_recognition_summary(results: list[ImageRecognitionResult]) -> str:
-    crop = sum(1 for result in results if result.recognition_source == "cloud_crop")
     full = sum(1 for result in results if result.recognition_source == "cloud_full")
     vertical_full = sum(1 for result in results if result.recognition_source == "cloud_vertical_full")
-    retry = sum(1 for result in results if result.recognition_source == "cloud_retry_full")
     failed = sum(1 for result in results if result.recognition_source == "cloud_failed")
-    if not any((crop, full, vertical_full, retry, failed)):
+    if not any((full, vertical_full, failed)):
         return ""
-    return f"云端：横裁剪 {crop}，横整图 {full}，竖整图 {vertical_full}，重试 {retry}，失败 {failed}"
+    return f"云端：横整图 {full}，竖整图 {vertical_full}，失败 {failed}"

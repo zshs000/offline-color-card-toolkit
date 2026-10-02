@@ -30,7 +30,6 @@ def test_write_recognition_log_summarizes_usage_and_redacts_api_key(tmp_path: Pa
         base_url="https://example.test/v1",
         api_key="secret-key",
         model="qwen3.6-flash",
-        horizontal_use_yolo=False,
     )
 
     log_path = write_recognition_log(
@@ -44,7 +43,7 @@ def test_write_recognition_log_summarizes_usage_and_redacts_api_key(tmp_path: Pa
 
     payload = json.loads(log_path.read_text(encoding="utf-8"))
     assert payload["cloud_config"]["api_key"] == "***"
-    assert payload["cloud_config"]["horizontal_use_yolo"] is False
+    assert "horizontal_use_yolo" not in payload["cloud_config"]
     assert payload["summary"]["prompt_tokens"] == 1000
     assert payload["summary"]["completion_tokens"] == 100
     assert payload["summary"]["estimated_cost_rmb"] == 0.00192

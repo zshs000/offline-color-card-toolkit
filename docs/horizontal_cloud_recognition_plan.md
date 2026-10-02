@@ -4,25 +4,20 @@
 
 ## Scope
 
-- Horizontal and vertical images use cloud vision recognition when cloud config is complete.
-- Without cloud config, both orientations keep the current local YOLO + OCR flow.
+- Horizontal and vertical images always use full-image cloud vision recognition when cloud config is complete.
+- Without cloud config, the UI asks the user to configure Base URL, API Key, and Model; it does not start local YOLO/OCR recognition.
 - The cloud API must be OpenAI-compatible and configurable with `base_url`, `api_key`, and `model`.
 
 ## Routing
 
 1. Detect image orientation locally.
-2. If cloud config is incomplete, use the existing local recognizer.
-3. For horizontal images with cloud config, try YOLO cropping with `conf=0.1`.
-4. The UI setting can disable horizontal YOLO cropping; if disabled, send the full image directly.
-5. If horizontal YOLO is enabled and both `name_area` and `code_area` exist at `conf >= 0.1`, send two cropped images to the model.
-6. If either horizontal area is missing, send the full image to the model.
-7. If cropped horizontal recognition returns invalid JSON or an unusable result, retry once with the full image.
-8. For vertical images with cloud config, send the full image to the model.
+2. If cloud config is incomplete, show a configuration warning and stop.
+3. For horizontal images, send the full image to the model with the full-image prompt.
+4. For vertical images, send the full image to the model with the vertical prompt.
 
 ## Prompt Strategy
 
-- Use three prompt templates:
-  - Horizontal cropped prompt: first image is `name_area`, second image is `code_area`.
+- Use two prompt templates:
   - Horizontal full-image prompt: one full color-card image.
   - Vertical full-image prompt: one full vertical color-card image; detect whether there are 2 or 3 code columns, preserve skipped numeric codes, preserve alphanumeric codes such as `A1`, and return the `codes` array column-by-column from left to right, each column top-to-bottom.
 - The model returns only JSON:
@@ -48,13 +43,11 @@
 
 Each cloud result records:
 
-- `cloud_crop`: recognized from cropped `name_area` + `code_area`.
 - `cloud_full`: horizontal image recognized from the full image.
 - `cloud_vertical_full`: vertical image recognized from the full image.
-- `cloud_retry_full`: cropped recognition failed validation, then full image succeeded.
 - `cloud_failed`: cloud recognition failed and the app used the existing manual fallback result.
 
-The UI summary should report counts for horizontal cropped, horizontal full-image, vertical full-image, retry, and failed cloud recognitions.
+The UI summary reports counts for horizontal full-image, vertical full-image, and failed cloud recognitions.
 
 ## Observability
 

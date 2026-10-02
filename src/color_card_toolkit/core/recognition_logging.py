@@ -71,7 +71,6 @@ def _safe_cloud_config(config: CloudVisionConfig | None) -> dict[str, Any] | Non
         "api_key": "***" if config.api_key else "",
         "model": config.model,
         "enable_thinking": config.enable_thinking,
-        "horizontal_use_yolo": config.horizontal_use_yolo,
         "concurrency": config.concurrency,
         "input_price_per_million_tokens": config.input_price_per_million_tokens,
         "output_price_per_million_tokens": config.output_price_per_million_tokens,

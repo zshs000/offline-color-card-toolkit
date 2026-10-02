@@ -16,7 +16,6 @@ class RecognitionSettings:
     base_url: str = ""
     api_key: str = ""
     model: str = ""
-    horizontal_use_yolo: bool = False
     cloud_concurrency: int = 4
     # Main-image ruler detection only. Stored as a ratio (20% -> 0.20).
     main_image_ruler_search_ratio: float = 0.20
@@ -47,7 +46,6 @@ def load_recognition_settings(path: Path | None = None) -> RecognitionSettings:
         base_url=str(payload.get("base_url") or settings.base_url),
         api_key=str(payload.get("api_key") or settings.api_key),
         model=str(payload.get("model") or settings.model),
-        horizontal_use_yolo=bool(payload.get("horizontal_use_yolo", settings.horizontal_use_yolo)),
         cloud_concurrency=_clamp_concurrency(payload.get("cloud_concurrency", settings.cloud_concurrency)),
         main_image_ruler_search_ratio=_clamp_ruler_search_ratio(
             payload.get("main_image_ruler_search_ratio", settings.main_image_ruler_search_ratio)

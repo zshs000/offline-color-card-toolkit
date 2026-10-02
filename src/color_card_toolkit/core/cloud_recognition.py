@@ -14,30 +14,7 @@ from typing import Any
 from PIL import Image, ImageOps
 
 from color_card_toolkit.core.grouping import parse_group_name
-from color_card_toolkit.core.layout_detection import crop_horizontal_api_regions
 from color_card_toolkit.core.models import ImageRecognitionResult
-
-CROP_PROMPT = """You are a color-card recognition assistant. The user provides two images:
-1. The top-left group/name area.
-2. The number row above the color blocks.
-
-Return only JSON. Do not explain. Do not use Markdown.
-
-Requirements:
-- raw_name: read the group/name code from the white-background label/tag in the first image.
-- The white-background label/tag is the authoritative source for raw_name.
-- Ignore text outside the white-background label/tag when choosing raw_name.
-- 组名必须从白底标签/白底贴纸中读取。
-- 不要把非白底区域、装饰文字、说明文字、货名文字当作组名。
-- base_name: remove a trailing page marker from raw_name, such as (1), （2）, or -1.
-- sequence: if raw_name explicitly contains a page marker such as (1), （2）, or -1, return that integer; otherwise return null.
-- codes: read the number row in the second image from left to right.
-- Do not read Description, Thickness, Size, specifications, or other text.
-- Do not fill numbers that are not present in the image.
-- Return all codes as strings.
-
-Output shape:
-{"raw_name":"","base_name":"","sequence":null,"codes":[]}"""
 
 FULL_IMAGE_PROMPT = """You are a color-card recognition assistant. The user provides one full color-card image.
 
@@ -123,7 +100,6 @@ class CloudVisionConfig:
     model: str
     timeout_seconds: int = 90
     enable_thinking: bool | None = False
-    horizontal_use_yolo: bool = True
     concurrency: int = 4
     input_price_per_million_tokens: float = 1.2
     output_price_per_million_tokens: float = 7.2
@@ -148,33 +124,6 @@ def recognize_horizontal_image_with_cloud(image_path: str | Path, config: CloudV
     path = Path(image_path)
     if not config.enabled:
         raise CloudRecognitionError("cloud recognition config is incomplete")
-
-    crops = crop_horizontal_api_regions(path, conf=0.1) if config.horizontal_use_yolo else None
-    if crops is not None:
-        crop_result: ImageRecognitionResult | None = None
-        try:
-            response = _call_openai_compatible_vision(
-                config,
-                CROP_PROMPT,
-                [crops.name_image, crops.code_image],
-            )
-            crop_result = _result_from_response(path, response, config=config, source="cloud_crop", retry_count=0)
-            result = crop_result
-            _validate_cloud_result(result)
-            return result
-        except Exception as crop_exc:
-            response = _call_openai_compatible_vision(
-                config,
-                FULL_IMAGE_PROMPT,
-                [_load_full_image(path)],
-            )
-            result = _result_from_response(path, response, config=config, source="cloud_retry_full", retry_count=1)
-            if crop_result is not None:
-                _merge_api_usage(result, crop_result)
-            result.warnings.append(f"裁剪云端识别失败，已整图重试：{crop_exc}")
-            _validate_cloud_result(result)
-            return result
-
     response = _call_openai_compatible_vision(
         config,
         FULL_IMAGE_PROMPT,
@@ -454,16 +403,6 @@ def _result_from_payload(
         api_elapsed_seconds=elapsed_seconds,
         api_model=config.model if config is not None else "",
     )
-
-
-def _merge_api_usage(target: ImageRecognitionResult, extra: ImageRecognitionResult) -> None:
-    target.api_prompt_tokens += extra.api_prompt_tokens
-    target.api_completion_tokens += extra.api_completion_tokens
-    target.api_total_tokens += extra.api_total_tokens
-    target.api_image_tokens += extra.api_image_tokens
-    target.api_text_tokens += extra.api_text_tokens
-    target.api_estimated_cost_rmb += extra.api_estimated_cost_rmb
-    target.api_elapsed_seconds += extra.api_elapsed_seconds
 
 
 def _parse_sequence(value: Any, fallback: int, fallback_explicit: bool) -> tuple[int, bool]:

@@ -98,17 +98,16 @@ def test_recognize_images_runs_batch_and_populates_table(monkeypatch, tmp_path: 
     page = StackToFlatPage(on_back=lambda: None)
     source = tmp_path / "PU88.png"
     page._image_paths = [source]
+    page._recognition_settings.base_url = "https://example.test/v1"
+    page._recognition_settings.api_key = "key"
+    page._recognition_settings.model = "model"
+    page._recognition_settings.cloud_concurrency = 4
     captured: dict[str, object] = {}
 
-    def fake_engine(**kwargs):
-        captured["engine_kwargs"] = kwargs
-        return object()
-
-    monkeypatch.setattr(stack_to_flat_page_module, "RapidOcrEngine", fake_engine)
     monkeypatch.setattr(
         stack_to_flat_page_module,
         "recognize_image",
-        lambda image_path, ocr_engine: ImageRecognitionResult(
+        lambda image_path, **kwargs: ImageRecognitionResult(
             image_path=image_path,
             raw_name="PU88",
             base_name="PU88",
@@ -131,8 +130,7 @@ def test_recognize_images_runs_batch_and_populates_table(monkeypatch, tmp_path: 
     assert page.pick_images_button.isEnabled()
     assert page.recognize_button.isEnabled()
     assert page.generate_button.isEnabled()
-    assert captured["max_workers"] == 2
-    assert captured["engine_kwargs"] == {"intra_op_num_threads": 1, "inter_op_num_threads": 1}
+    assert captured["max_workers"] == 4
 
 
 def _run_batch_task_immediately(

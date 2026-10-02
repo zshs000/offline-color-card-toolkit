@@ -1,5 +1,7 @@
 # RapidOCR 输入类型导致 `9` 识别成 `6` 的调查记录
 
+> 本文记录已废弃的本地布局识别实验。`layout_detection` 模块及其运行依赖已于 2026-10-02 移除，以下代码片段仅作历史参考，不能直接用于当前应用。
+
 日期：2026-06-21
 
 ## 背景
@@ -241,4 +243,3 @@ ocr_blocks = ocr_engine.recognize_image_object(np.array(gray))
 ```
 
 当前实验中，RGB ndarray 和灰度 ndarray 都能识别 `PU-6157(1)` 的第 9 位。
-

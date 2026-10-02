@@ -698,7 +698,6 @@ class MainImageCropPage(QWidget):
             base_url=base_url,
             api_key=api_key,
             model=model,
-            horizontal_use_yolo=self._recognition_settings.horizontal_use_yolo,
             concurrency=self._recognition_settings.cloud_concurrency,
         )
 
@@ -744,7 +743,6 @@ class MainImageCropPage(QWidget):
             base_url=base_url_edit.text().strip(),
             api_key=api_key_edit.text().strip(),
             model=model_edit.text().strip(),
-            horizontal_use_yolo=self._recognition_settings.horizontal_use_yolo,
             cloud_concurrency=self._recognition_settings.cloud_concurrency,
             main_image_ruler_search_ratio=ruler_spin.value() / 100,
         )
