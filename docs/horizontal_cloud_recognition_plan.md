@@ -1,5 +1,7 @@
 # Cloud Recognition Plan
 
+> Historical plan: local YOLO fallback and optional horizontal YOLO cropping are retired by the [2026-10-02 decision](decisions/2026-10-02-remove-yolo-runtime.md). Both orientations now use full-image cloud recognition; trained models remain archived.
+
 ## Scope
 
 - Horizontal and vertical images use cloud vision recognition when cloud config is complete.
