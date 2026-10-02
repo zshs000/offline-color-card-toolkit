@@ -23,7 +23,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["polars", "networkx"],
+    excludes=["ultralytics", "torch", "torchvision", "polars", "_polars_runtime_32", "networkx"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
