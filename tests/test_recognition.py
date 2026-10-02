@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 import color_card_toolkit.core.recognition as recognition_module
@@ -20,9 +21,22 @@ def test_infer_layout_orientation_uses_exif_rotation(tmp_path: Path) -> None:
     assert infer_layout_orientation(image_path) == "horizontal"
 
 
-def test_recognize_image_routes_vertical_to_cloud_when_configured(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("width", "height", "orientation", "source"),
+    [
+        (80, 120, "vertical", "cloud_vertical_full"),
+        (1000, 1000, "vertical", "cloud_vertical_full"),
+        (1100, 1000, "vertical", "cloud_vertical_full"),
+        (1199, 1000, "vertical", "cloud_vertical_full"),
+        (1200, 1000, "horizontal", "cloud_full"),
+        (1201, 1000, "horizontal", "cloud_full"),
+    ],
+)
+def test_recognize_image_preserves_layout_threshold(
+    monkeypatch, tmp_path: Path, width: int, height: int, orientation: str, source: str
+) -> None:
     image_path = tmp_path / "6002(1).jpg"
-    Image.new("RGB", (80, 120), "white").save(image_path)
+    Image.new("RGB", (width, height), "white").save(image_path)
     config = CloudVisionConfig(base_url="https://example.test/v1", api_key="key", model="model")
 
     def fake_cloud(path, cloud_config):
@@ -34,19 +48,20 @@ def test_recognize_image_routes_vertical_to_cloud_when_configured(monkeypatch, t
             base_name="6002",
             sequence=1,
             color_codes=["1", "2", "3"],
-            recognition_source="cloud_vertical_full",
+            recognition_source=source,
         )
 
-    monkeypatch.setattr(recognition_module, "recognize_vertical_image_with_cloud", fake_cloud)
+    wrong_orientation = "horizontal" if orientation == "vertical" else "vertical"
+    monkeypatch.setattr(recognition_module, f"recognize_{orientation}_image_with_cloud", fake_cloud)
     monkeypatch.setattr(
         recognition_module,
-        "recognize_horizontal_image_with_cloud",
+        f"recognize_{wrong_orientation}_image_with_cloud",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("wrong orientation")),
     )
 
     result = recognize_image(image_path, cloud_config=config)
 
-    assert result.recognition_source == "cloud_vertical_full"
+    assert result.recognition_source == source
     assert result.raw_name == "6002(1)"
 
 

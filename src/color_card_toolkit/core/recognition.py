@@ -12,6 +12,8 @@ from color_card_toolkit.core.cloud_recognition import (
 from color_card_toolkit.core.grouping import parse_group_name
 from color_card_toolkit.core.models import ImageRecognitionResult
 
+VERTICAL_ASPECT_RATIO_THRESHOLD = 1.2
+
 
 def recognize_image(
     image_path: str | Path,
@@ -44,7 +46,8 @@ def infer_layout_orientation(image_path: str | Path) -> str:
     with Image.open(path) as opened:
         image = ImageOps.exif_transpose(opened)
         width, height = image.size
-    return "vertical" if height > width else "horizontal"
+    ratio = width / max(height, 1)
+    return "vertical" if ratio < VERTICAL_ASPECT_RATIO_THRESHOLD else "horizontal"
 
 
 def _manual_result_for_image(image_path: Path, warning: str) -> ImageRecognitionResult:
