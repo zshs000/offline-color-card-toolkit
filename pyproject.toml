@@ -34,7 +34,7 @@ color-card-review-app = "color_card_toolkit.review_app.server:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-color_card_toolkit = ["resources/templates/*.docx", "resources/models/*.pt", "review_app/static/*"]
+color_card_toolkit = ["resources/templates/*.docx", "review_app/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
