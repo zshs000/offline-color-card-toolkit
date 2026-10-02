@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -199,3 +201,63 @@ def test_cloud_main_image_reads_white_label_from_resized_full_image(monkeypatch,
     assert calls[0][1][0].size == (2048, 1536)
     assert "anywhere in the full image" in cloud_recognition.MAIN_IMAGE_NAME_PROMPT
     assert "ruler numbers" in cloud_recognition.MAIN_IMAGE_NAME_PROMPT
+
+
+def test_image_to_data_url_adapts_to_encoded_size_limit() -> None:
+    image = Image.effect_noise((512, 512), 100).convert("RGB")
+
+    data_url = cloud_recognition._image_to_data_url(image, max_bytes=20_000)
+
+    assert len(data_url.encode("ascii")) < 20_000
+    assert data_url.startswith("data:image/jpeg;base64,")
+    payload = base64.b64decode(data_url.split(",", 1)[1])
+    with Image.open(io.BytesIO(payload)) as encoded:
+        assert encoded.size[0] <= 512
+        assert encoded.size[1] <= 512
+
+
+def test_cloud_call_retries_413_with_stronger_image_compression(monkeypatch) -> None:
+    seen_targets = []
+    requests = []
+
+    def fake_image_to_data_url(image, *, max_bytes):
+        seen_targets.append(max_bytes)
+        return f"data:image/jpeg;base64,{max_bytes}"
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        if len(requests) == 1:
+            raise cloud_recognition.urllib.error.HTTPError(
+                request.full_url,
+                413,
+                "Request Entity Too Large",
+                {},
+                io.BytesIO(b"Exceeded limit on max bytes per data-uri item"),
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr(cloud_recognition, "_image_to_data_url", fake_image_to_data_url)
+    monkeypatch.setattr(cloud_recognition.urllib.request, "urlopen", fake_urlopen)
+
+    response = cloud_recognition._call_openai_compatible_vision(
+        _config(),
+        "describe",
+        [Image.new("RGB", (20, 20), "white")],
+    )
+
+    assert response.content_text == "ok"
+    assert len(requests) == 2
+    assert seen_targets == [
+        cloud_recognition.DATA_URI_TARGET_BYTES,
+        cloud_recognition.DATA_URI_RETRY_TARGET_BYTES,
+    ]

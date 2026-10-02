@@ -106,6 +106,15 @@ Output shape:
 
 MAIN_IMAGE_CLOUD_MAX_SIZE = 2048
 
+# 百炼多模态接口对单个 Data URI 的 Base64 字符串限制为 10 MiB。这里预留
+# 一点余量，避免严格的小于判断、请求封装或网关差异导致刚好卡在边界上。
+MAX_DATA_URI_BYTES = 10 * 1024 * 1024
+DATA_URI_TARGET_BYTES = MAX_DATA_URI_BYTES - 128 * 1024
+DATA_URI_RETRY_TARGET_BYTES = 8 * 1024 * 1024
+DATA_URI_PREFIX = "data:image/jpeg;base64,"
+JPEG_QUALITY_LEVELS = (92, 85, 75, 65, 55, 45)
+MIN_ADAPTIVE_IMAGE_SIDE = 64
+
 
 @dataclass(frozen=True)
 class CloudVisionConfig:
@@ -242,39 +251,49 @@ def _call_openai_compatible_vision(
     images: list[Image.Image],
 ) -> CloudVisionResponse:
     url = _chat_completions_url(config.base_url)
-    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    content.extend(
-        {
-            "type": "image_url",
-            "image_url": {"url": _image_to_data_url(image)},
-        }
-        for image in images
-    )
-    body = {
-        "model": config.model,
-        "messages": [{"role": "user", "content": content}],
-        "temperature": 0,
-    }
-    if config.enable_thinking is not None:
-        body["enable_thinking"] = config.enable_thinking
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     start = time.perf_counter()
-    try:
-        with urllib.request.urlopen(request, timeout=config.timeout_seconds) as response:
-            response_body = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace")
-        raise CloudRecognitionError(f"cloud API HTTP {exc.code}: {error_body}") from exc
-    except urllib.error.URLError as exc:
-        raise CloudRecognitionError(f"cloud API request failed: {exc}") from exc
+
+    # 绝大多数图片在第一次编码时就能满足限制；如果网关仍返回 413，
+    # 再用更小的目标重新编码一次，兼容服务端对整体请求体的额外限制。
+    target_sizes = (DATA_URI_TARGET_BYTES, DATA_URI_RETRY_TARGET_BYTES)
+    for attempt, target_bytes in enumerate(target_sizes):
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        content.extend(
+            {
+                "type": "image_url",
+                "image_url": {"url": _image_to_data_url(image, max_bytes=target_bytes)},
+            }
+            for image in images
+        )
+        body = {
+            "model": config.model,
+            "messages": [{"role": "user", "content": content}],
+            "temperature": 0,
+        }
+        if config.enable_thinking is not None:
+            body["enable_thinking"] = config.enable_thinking
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {config.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=config.timeout_seconds) as response:
+                response_body = response.read().decode("utf-8")
+            break
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            if exc.code == 413 and attempt == 0:
+                continue
+            raise CloudRecognitionError(f"cloud API HTTP {exc.code}: {error_body}") from exc
+        except urllib.error.URLError as exc:
+            raise CloudRecognitionError(f"cloud API request failed: {exc}") from exc
+    else:  # pragma: no cover - the loop either breaks or raises above
+        raise CloudRecognitionError("cloud API request failed after image compression retry")
 
     try:
         data = json.loads(response_body)
@@ -306,11 +325,46 @@ def _chat_completions_url(base_url: str) -> str:
     return f"{cleaned}/chat/completions"
 
 
-def _image_to_data_url(image: Image.Image) -> str:
+def _image_to_data_url(image: Image.Image, *, max_bytes: int = DATA_URI_TARGET_BYTES) -> str:
+    """Encode an image as a Bailian-compatible Data URI.
+
+    The API limit applies to the encoded Data URI item, not the source file.
+    Keep the original quality and dimensions whenever possible, then lower JPEG
+    quality and finally downscale until the encoded value fits the target.
+    """
+    working = image.convert("RGB")
+    for _ in range(10):
+        for quality in JPEG_QUALITY_LEVELS:
+            data_url = _encode_jpeg_data_url(working, quality=quality)
+            if len(data_url.encode("ascii")) < max_bytes:
+                return data_url
+
+        width, height = working.size
+        if min(width, height) <= MIN_ADAPTIVE_IMAGE_SIDE:
+            break
+        next_size = (
+            max(MIN_ADAPTIVE_IMAGE_SIDE, round(width * 0.75)),
+            max(MIN_ADAPTIVE_IMAGE_SIDE, round(height * 0.75)),
+        )
+        if next_size == working.size:
+            break
+        working = working.resize(next_size, Image.Resampling.LANCZOS)
+
+    # This is only reachable for an unusually small caller-provided limit. The
+    # normal 8-10 MiB targets always fit well before this point.
+    data_url = _encode_jpeg_data_url(working, quality=25)
+    if len(data_url.encode("ascii")) < max_bytes:
+        return data_url
+    raise CloudRecognitionError(
+        f"image remains too large after adaptive compression ({len(data_url.encode('ascii'))} bytes)"
+    )
+
+
+def _encode_jpeg_data_url(image: Image.Image, *, quality: int) -> str:
     buffer = BytesIO()
-    image.convert("RGB").save(buffer, format="JPEG", quality=92)
+    image.save(buffer, format="JPEG", quality=quality)
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded}"
+    return f"{DATA_URI_PREFIX}{encoded}"
 
 
 def _load_full_image(path: Path) -> Image.Image:
