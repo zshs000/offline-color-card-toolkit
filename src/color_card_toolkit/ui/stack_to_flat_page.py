@@ -590,6 +590,7 @@ class StackToFlatPage(QWidget):
             QMessageBox.critical(self, "生成失败", str(exc))
             return
 
+        self._clear_recognition_state()
         QMessageBox.information(self, "生成完成", f"Word 已生成：\n{generated}")
 
 
