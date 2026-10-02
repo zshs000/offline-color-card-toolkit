@@ -17,6 +17,7 @@ class RecognitionSettings:
     api_key: str = ""
     model: str = ""
     cloud_concurrency: int = 4
+    main_image_cloud_concurrency: int = 3
     # Main-image ruler detection only. Stored as a ratio (20% -> 0.20).
     main_image_ruler_search_ratio: float = 0.20
 
@@ -47,6 +48,9 @@ def load_recognition_settings(path: Path | None = None) -> RecognitionSettings:
         api_key=str(payload.get("api_key") or settings.api_key),
         model=str(payload.get("model") or settings.model),
         cloud_concurrency=_clamp_concurrency(payload.get("cloud_concurrency", settings.cloud_concurrency)),
+        main_image_cloud_concurrency=_clamp_main_image_concurrency(
+            payload.get("main_image_cloud_concurrency", settings.main_image_cloud_concurrency)
+        ),
         main_image_ruler_search_ratio=_clamp_ruler_search_ratio(
             payload.get("main_image_ruler_search_ratio", settings.main_image_ruler_search_ratio)
         ),
@@ -55,6 +59,9 @@ def load_recognition_settings(path: Path | None = None) -> RecognitionSettings:
 
 def save_recognition_settings(settings: RecognitionSettings, path: Path | None = None) -> Path:
     settings.cloud_concurrency = _clamp_concurrency(settings.cloud_concurrency)
+    settings.main_image_cloud_concurrency = _clamp_main_image_concurrency(
+        settings.main_image_cloud_concurrency
+    )
     settings.main_image_ruler_search_ratio = _clamp_ruler_search_ratio(
         settings.main_image_ruler_search_ratio
     )
@@ -70,6 +77,14 @@ def _clamp_concurrency(value: Any) -> int:
     except (TypeError, ValueError):
         parsed = 4
     return min(10, max(1, parsed))
+
+
+def _clamp_main_image_concurrency(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = 3
+    return min(10, max(2, parsed))
 
 
 def _clamp_ruler_search_ratio(value: Any) -> float:

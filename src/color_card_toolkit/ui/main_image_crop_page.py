@@ -410,7 +410,7 @@ class MainImageCropPage(QWidget):
             on_item_failed=lambda _index, label, message: self._crop_failures.append(
                 f"{label}：{message}"
             ),
-            max_workers=2,
+            max_workers=cloud_config.concurrency,
             parent=self,
         )
 
@@ -465,7 +465,7 @@ class MainImageCropPage(QWidget):
             ),
             on_finished=self._on_retry_round_finished,
             on_failed=self._on_cloud_failed,
-            max_workers=2,
+            max_workers=cloud_config.concurrency,
             parent=self,
         )
 
@@ -592,6 +592,11 @@ class MainImageCropPage(QWidget):
                 save_warnings.append(f"{item.source_path.name} 保存失败：{exc}")
 
         self._close_preview_server()
+        window = self.window()
+        if window.isMinimized():
+            window.showNormal()
+        window.raise_()
+        window.activateWindow()
         self._finish_run(saved, skipped, save_warnings)
 
     def _finish_without_preview(self, reason: str) -> None:
@@ -698,10 +703,11 @@ class MainImageCropPage(QWidget):
             base_url=base_url,
             api_key=api_key,
             model=model,
-            concurrency=self._recognition_settings.cloud_concurrency,
+            concurrency=self._recognition_settings.main_image_cloud_concurrency,
         )
 
     def _open_settings_dialog(self) -> None:
+        self._recognition_settings = load_recognition_settings()
         dialog = QDialog(self)
         dialog.setWindowTitle("主图识别设置")
         layout = QVBoxLayout(dialog)
@@ -724,6 +730,14 @@ class MainImageCropPage(QWidget):
         ruler_spin.setToolTip("在图片左上区域搜索标尺交点的最大范围；默认 20%。")
         form.addWidget(QLabel("标尺检测搜索范围："), 3, 0)
         form.addWidget(ruler_spin, 3, 1)
+
+        concurrency_spin = QSpinBox()
+        concurrency_spin.setObjectName("main_image_cloud_concurrency")
+        concurrency_spin.setRange(2, 10)
+        concurrency_spin.setValue(self._recognition_settings.main_image_cloud_concurrency)
+        concurrency_spin.setToolTip("仅用于主图云端识别及失败重试，默认 3 并发。")
+        form.addWidget(QLabel("主图云端并发数："), 4, 0)
+        form.addWidget(concurrency_spin, 4, 1)
         layout.addLayout(form)
 
         note = QLabel(
@@ -744,6 +758,7 @@ class MainImageCropPage(QWidget):
             api_key=api_key_edit.text().strip(),
             model=model_edit.text().strip(),
             cloud_concurrency=self._recognition_settings.cloud_concurrency,
+            main_image_cloud_concurrency=concurrency_spin.value(),
             main_image_ruler_search_ratio=ruler_spin.value() / 100,
         )
         try:

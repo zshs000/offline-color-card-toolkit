@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton, QSpinBox
 
 import color_card_toolkit.ui.main_image_crop_page as main_crop_module
 import color_card_toolkit.ui.scan_rename_page as scan_rename_module
@@ -107,7 +107,8 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
         base_url="https://example.test/v1",
         api_key="key",
         model="model",
-        cloud_concurrency=6,
+        cloud_concurrency=10,
+        main_image_cloud_concurrency=6,
     )
     captured: dict[str, object] = {}
 
@@ -152,6 +153,7 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     assert page.pick_images_button.isEnabled()
     assert page.settings_button.isEnabled()
     assert captured["max_workers"] == 2
+    assert captured["worker_counts"] == [2, 6, 2]
     assert page._recognition_settings.main_image_ruler_search_ratio == 0.20
 
 
@@ -169,11 +171,14 @@ def test_main_image_crop_retries_only_failed_names_three_times(monkeypatch, tmp_
         base_url="https://example.test/v1",
         api_key="key",
         model="qwen3.7-plus",
+        main_image_cloud_concurrency=7,
     )
+    captured: dict[str, object] = {}
     calls = {source.name: 0 for source in sources}
     shown: dict[str, str] = {}
 
     def fake_recognize(path, config):
+        assert config.concurrency == 7
         calls[path.name] += 1
         if path.name == "recover.jpg" and calls[path.name] == 1:
             raise RuntimeError("The write operation timed out")
@@ -202,7 +207,7 @@ def test_main_image_crop_retries_only_failed_names_three_times(monkeypatch, tmp_
     monkeypatch.setattr(
         main_crop_module,
         "run_batch_task",
-        lambda *args, **kwargs: _run_batch_task_immediately(*args, **kwargs),
+        lambda *args, **kwargs: _run_batch_task_immediately(*args, captured=captured, **kwargs),
     )
     monkeypatch.setattr(main_crop_module, "write_recognition_log", lambda *args, **kwargs: tmp_path / "usage.json")
     monkeypatch.setattr(
@@ -215,6 +220,7 @@ def test_main_image_crop_retries_only_failed_names_three_times(monkeypatch, tmp_
     page._confirm_crop()
 
     assert calls == {"recover.jpg": 2, "never.jpg": 4, "first-ok.jpg": 1}
+    assert captured["worker_counts"] == [2, 7, 7, 7, 7, 2]
     assert (output_dir / "云端-recover.jpg").exists()
     assert not (output_dir / "never.jpg").exists()
     assert (output_dir / "云端-first-ok.jpg").exists()
@@ -261,6 +267,7 @@ def _run_batch_task_immediately(
 ):
     if captured is not None:
         captured["max_workers"] = max_workers
+        captured.setdefault("worker_counts", []).append(max_workers)
     results = []
     failed_count = 0
     for index, item in enumerate(items):
@@ -274,6 +281,54 @@ def _run_batch_task_immediately(
                 on_item_failed(index, str(label), str(exc))
     on_finished(results, failed_count)
     return object()
+
+
+def test_main_image_settings_dialog_saves_independent_concurrency(monkeypatch) -> None:
+    _app()
+    settings = RecognitionSettings(cloud_concurrency=10)
+    monkeypatch.setattr(main_crop_module, "load_recognition_settings", lambda: settings)
+    page = MainImageCropPage(on_back=lambda: None)
+    saved = []
+
+    def accept_dialog(dialog):
+        spin = dialog.findChild(QSpinBox, "main_image_cloud_concurrency")
+        assert (spin.minimum(), spin.maximum(), spin.value()) == (2, 10, 3)
+        spin.setValue(8)
+        return QDialog.Accepted
+
+    monkeypatch.setattr(QDialog, "exec", accept_dialog)
+    monkeypatch.setattr(main_crop_module, "save_recognition_settings", saved.append)
+
+    page._open_settings_dialog()
+
+    assert saved[0].main_image_cloud_concurrency == 8
+    assert saved[0].cloud_concurrency == 10
+
+
+def test_browser_confirmation_saves_once_and_activates_desktop(monkeypatch, tmp_path: Path) -> None:
+    _app()
+    page = MainImageCropPage(on_back=lambda: None)
+    preview = tmp_path / "preview.jpg"
+    preview.write_bytes(b"cropped")
+    source = tmp_path / "source.jpg"
+    page._crop_output_folder = tmp_path / "output"
+    page._preview_entries = [
+        main_crop_module._PreviewEntry("1", source, preview, "Name", _cloud_name_result(source, "Name"))
+    ]
+    events = []
+    monkeypatch.setattr(page, "isMinimized", lambda: True)
+    monkeypatch.setattr(page, "showNormal", lambda: events.append("restore"))
+    monkeypatch.setattr(page, "raise_", lambda: events.append("raise"))
+    monkeypatch.setattr(page, "activateWindow", lambda: events.append("activate"))
+    monkeypatch.setattr(page, "_finish_run", lambda saved, skipped, warnings: events.append((saved, skipped, warnings)))
+    selections = [{"id": "1", "name": "Reviewed", "include": True}]
+
+    page._save_preview_entries(selections)
+    page._save_preview_entries(selections)
+
+    assert (page._crop_output_folder / "Reviewed.jpg").read_bytes() == b"cropped"
+    assert len(list(page._crop_output_folder.iterdir())) == 1
+    assert events == ["restore", "raise", "activate", (1, 0, [])]
 
 
 def test_home_page_exposes_four_entries_and_routes_new_features() -> None:

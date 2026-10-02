@@ -101,9 +101,9 @@ class MainImagePreviewServer(QObject):
                                 "include": bool(entry.get("include", True)),
                             }
                         )
-                    owner.confirmed.emit(cleaned)
                     body = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
                     self._send_bytes(body, "application/json; charset=utf-8")
+                    owner.confirmed.emit(cleaned)
                 except Exception as exc:
                     body = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8")
                     self._send_bytes(body, "application/json; charset=utf-8", status=400)
@@ -118,6 +118,7 @@ class MainImagePreviewServer(QObject):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(body)
+                self.wfile.flush()
 
         return Handler
 
@@ -326,6 +327,13 @@ dialog.addEventListener('close', () => document.body.classList.remove('reviewing
 dialog.addEventListener('click', event => {if (event.target === dialog) dialog.close();});
 
 function showStatus(text) {statusEl.textContent = text; statusEl.style.display = 'block';}
+function finishConfirmation(button) {
+  button.textContent = '已提交';
+  document.title = '审核已提交 · 主图识别结果复核';
+  document.querySelectorAll('textarea, input, .image-wrap').forEach(field => {field.disabled = true;});
+  showStatus('审核已提交。请返回桌面软件查看保存结果；此页面可以关闭。');
+  try {window.close();} catch {}
+}
 document.getElementById('confirm').addEventListener('click', async () => {
   const button = document.getElementById('confirm');
   button.disabled = true; showStatus('正在提交确认…');
@@ -333,8 +341,12 @@ document.getElementById('confirm').addEventListener('click', async () => {
   try {
     const response = await fetch('/confirm', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(rows)});
     const data = await response.json();
-    if (!data.ok) throw new Error(data.error || '提交失败');
-    showStatus('已提交，正在回到桌面软件…');
-  } catch (error) {button.disabled = false; showStatus('提交失败：' + error.message);}
+    if (!response.ok || !data.ok) throw new Error(data.error || '提交失败');
+  } catch (error) {
+    button.disabled = false;
+    showStatus('提交失败：' + error.message);
+    return;
+  }
+  finishConfirmation(button);
 });
 </script></body></html>"""

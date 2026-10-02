@@ -251,6 +251,7 @@ class StackToFlatPage(QWidget):
         )
 
     def _open_settings_dialog(self) -> None:
+        self._recognition_settings = load_recognition_settings()
         dialog = QDialog(self)
         dialog.setWindowTitle("识别设置")
         layout = QVBoxLayout(dialog)
@@ -289,6 +290,7 @@ class StackToFlatPage(QWidget):
                 api_key=api_key_edit.text().strip(),
                 model=model_edit.text().strip(),
                 cloud_concurrency=concurrency_spinbox.value(),
+                main_image_cloud_concurrency=self._recognition_settings.main_image_cloud_concurrency,
                 main_image_ruler_search_ratio=self._recognition_settings.main_image_ruler_search_ratio,
             )
             try:

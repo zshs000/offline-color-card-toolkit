@@ -5,10 +5,11 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox
+from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QMessageBox
 
 import color_card_toolkit.ui.stack_to_flat_page as stack_to_flat_page_module
 from color_card_toolkit.core.models import ImageRecognitionResult
+from color_card_toolkit.core.recognition_settings import RecognitionSettings
 from color_card_toolkit.ui.stack_to_flat_page import StackToFlatPage
 
 
@@ -50,6 +51,21 @@ def test_generate_word_clears_recognition_state(monkeypatch, tmp_path: Path) -> 
     assert page.image_summary.text() == "未选择图片"
     assert page.output_folder_edit.text() == str(tmp_path)
     assert page.output_name_edit.text() == "result.docx"
+
+
+def test_stack_settings_preserve_latest_main_image_concurrency(monkeypatch) -> None:
+    _app()
+    page = StackToFlatPage(on_back=lambda: None)
+    latest_settings = RecognitionSettings(cloud_concurrency=9, main_image_cloud_concurrency=8)
+    saved = []
+    monkeypatch.setattr(stack_to_flat_page_module, "load_recognition_settings", lambda: latest_settings)
+    monkeypatch.setattr(stack_to_flat_page_module, "save_recognition_settings", saved.append)
+    monkeypatch.setattr(QDialog, "exec", lambda self: QDialog.Accepted)
+
+    page._open_settings_dialog()
+
+    assert saved[0].cloud_concurrency == 9
+    assert saved[0].main_image_cloud_concurrency == 8
 
 
 def test_output_folder_defaults_to_user_output_directory() -> None:
