@@ -31,7 +31,11 @@ from color_card_toolkit.core.image_rename import (
     rename_processed_image,
 )
 from color_card_toolkit.core.models import ImageRecognitionResult
-from color_card_toolkit.core.recognition_logging import summarize_api_usage, write_recognition_log
+from color_card_toolkit.core.recognition_logging import (
+    concurrency_ratio,
+    summarize_api_usage,
+    write_recognition_log,
+)
 from color_card_toolkit.core.recognition_settings import (
     RecognitionSettings,
     load_recognition_settings,
@@ -302,6 +306,8 @@ class MainImageCropPage(QWidget):
                 self._crop_failures.append(f"日志写入失败：{exc}")
 
         usage = summarize_api_usage(api_results)
+        wall_seconds = max(0.0, (finished_at - (self._recognition_started_at or finished_at)).total_seconds())
+        ratio = concurrency_ratio(usage["api_elapsed_seconds"], wall_seconds)
         warnings = [
             f"{result.source_path.name}：{warning}"
             for result in image_results
@@ -314,6 +320,12 @@ class MainImageCropPage(QWidget):
             f"总 Token：{usage['total_tokens']:,}\n"
             f"预估费用：{usage['estimated_cost_rmb']:.6f} 元"
         )
+        if self._recognition_started_at is not None:
+            message += (
+                f"\n实际耗时：{wall_seconds:.2f} 秒\n"
+                f"API 耗时合计：{usage['api_elapsed_seconds']:.2f} 秒\n"
+                f"并发倍率：{ratio:.2f}x"
+            )
         if self._active_cloud_config is not None:
             message += (
                 "\n计价参考："
