@@ -25,15 +25,25 @@ SUPPORTED_RULER_SPANS_MM = (150, 100)
 HEALTH_MIN_INLIER_RATIO = 0.3
 HEALTH_MIN_SUPPORT_RATIO = 0.9
 _DPI_CANDIDATES = (800, 1200, 300, 600)
+# Some scanners leave a broad white margin before the ruler. Keep the lower
+# bound away from the image border, but search farther than the old 3%-12%
+# window so the material/ruler corner is still in the coarse ROI.
+COARSE_SEARCH_MIN_RATIO = 0.03
+COARSE_SEARCH_MAX_RATIO = 0.20
 
 
-def coarse_origin(gray: np.ndarray) -> tuple[int, int]:
+def coarse_origin(
+    gray: np.ndarray,
+    *,
+    max_search_ratio: float = COARSE_SEARCH_MAX_RATIO,
+) -> tuple[int, int]:
     """在左上角小框内找灰度剖面最陡的跳变，作为尺子起点的粗位置。"""
     height, width = gray.shape
     x_profile = np.median(gray[int(height * 0.2) : int(height * 0.75), :], axis=0)
     y_profile = np.median(gray[:, int(width * 0.2) : int(width * 0.85)], axis=1)
-    x_start, x_end = int(width * 0.03), int(width * 0.12)
-    y_start, y_end = int(height * 0.03), int(height * 0.12)
+    max_search_ratio = min(0.80, max(COARSE_SEARCH_MIN_RATIO + 0.01, float(max_search_ratio)))
+    x_start, x_end = int(width * COARSE_SEARCH_MIN_RATIO), int(width * max_search_ratio)
+    y_start, y_end = int(height * COARSE_SEARCH_MIN_RATIO), int(height * max_search_ratio)
     x = x_start + int(np.argmax(np.abs(np.diff(x_profile[x_start:x_end])))) + 1
     y = y_start + int(np.argmax(np.abs(np.diff(y_profile[y_start:y_end])))) + 1
     return x, y
@@ -524,6 +534,7 @@ def detect_ruler(
     dpi: tuple[int, int] | None = None,
     *,
     span_mm: int | None = None,
+    coarse_search_ratio: float | None = None,
 ) -> RulerGeometry | None:
     """检测图片中的尺子刻度。
 
@@ -540,7 +551,12 @@ def detect_ruler(
     if any(value <= 0 for value in spans):
         raise ValueError("ruler span must be positive")
 
-    direct = _detect_with_dpi(gray, scale, None, spans)
+    search_ratio = (
+        COARSE_SEARCH_MAX_RATIO
+        if coarse_search_ratio is None
+        else float(coarse_search_ratio)
+    )
+    direct = _detect_with_dpi(gray, scale, None, spans, coarse_search_ratio=search_ratio)
     if direct is not None and direct.healthy:
         return direct
 
@@ -555,7 +571,13 @@ def detect_ruler(
         if candidate in seen:
             continue
         seen.add(candidate)
-        geometry = _detect_with_dpi(gray, scale, candidate, spans)
+        geometry = _detect_with_dpi(
+            gray,
+            scale,
+            candidate,
+            spans,
+            coarse_search_ratio=search_ratio,
+        )
         if geometry is not None:
             results.append(geometry)
     if not results:
@@ -577,9 +599,11 @@ def _detect_with_dpi(
     scale: float,
     dpi: tuple[int, int] | None,
     spans: tuple[int, ...],
+    *,
+    coarse_search_ratio: float,
 ) -> RulerGeometry | None:
     height, width = gray.shape
-    coarse = coarse_origin(gray)
+    coarse = coarse_origin(gray, max_search_ratio=coarse_search_ratio)
     top_points = tick_endpoints(gray, coarse, top=True)
     left_points = tick_endpoints(gray, coarse, top=False)
     if len(top_points) < MIN_ENDPOINTS or len(left_points) < MIN_ENDPOINTS:

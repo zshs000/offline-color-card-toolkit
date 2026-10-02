@@ -13,7 +13,7 @@ from PIL import Image, ImageOps, JpegImagePlugin
 
 from color_card_toolkit.core.models import OcrBlock
 from color_card_toolkit.core.ocr_engine import OcrEngine
-from color_card_toolkit.core.ruler_detection import detect_ruler
+from color_card_toolkit.core.ruler_detection import RulerGeometry, detect_ruler
 
 DEFAULT_DPI = 300
 RULER_DETECTION_MAX_SIZE = 1500
@@ -112,6 +112,8 @@ def crop_main_images(
     *,
     crop_size_cm: int,
     name_recognizer: Callable[[Path], str] | None = None,
+    ruler_search_ratio: float | None = None,
+    allow_ruler_fallback: bool = True,
 ) -> list[ImageProcessResult]:
     folder = Path(output_dir)
     folder.mkdir(parents=True, exist_ok=True)
@@ -137,7 +139,16 @@ def crop_main_images(
 
         with _OUTPUT_PATH_LOCK:
             output_path = unique_output_path(folder, recognized_name, source.suffix)
-            crop_result = _crop_image(source, output_path, crop_size_cm)
+            crop_result = _crop_image(
+                source,
+                output_path,
+                crop_size_cm,
+                ruler_search_ratio=ruler_search_ratio,
+                allow_ruler_fallback=allow_ruler_fallback,
+            )
+        if not crop_result.detected and not crop_result.centered and not output_path.exists():
+            warnings.append("未检测到可靠标尺，未生成裁剪文件")
+            continue
         if crop_result.detected and not crop_result.healthy:
             warnings.append("标尺刻度检测可靠性偏低，已按检测结果裁剪，请人工核对")
         elif not crop_result.detected and crop_result.centered:
@@ -170,7 +181,24 @@ def rename_processed_image(result: ImageProcessResult, recognized_name: str) -> 
     return ImageProcessResult(result.source_path, output_path, clean_name, warnings)
 
 
-def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> _RulerCropResult:
+def crop_image_from_geometry(
+    source: str | Path,
+    output_path: str | Path,
+    crop_size_cm: int,
+    geometry: RulerGeometry,
+) -> _RulerCropResult:
+    """Crop using a previously health-checked ruler geometry."""
+    return _save_ruler_crop(Path(source), Path(output_path), crop_size_cm, geometry)
+
+
+def _crop_image(
+    source: Path,
+    output_path: Path,
+    crop_size_cm: int,
+    *,
+    ruler_search_ratio: float | None = None,
+    allow_ruler_fallback: bool = True,
+) -> _RulerCropResult:
     with Image.open(source) as image:
         source_format = image.format
         jpeg_save_kwargs = {}
@@ -190,32 +218,23 @@ def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> _RulerCro
             image,
             (dpi_x, dpi_y),
             span_mm=crop_size_cm * 10,
+            coarse_search_ratio=ruler_search_ratio,
         )
         if geometry is not None:
-            rotated = image.rotate(
-                geometry.rotation_degrees,
-                resample=Image.Resampling.BICUBIC,
-                expand=True,
-                fillcolor=(255, 255, 255),
+            _save_ruler_crop(
+                source,
+                output_path,
+                crop_size_cm,
+                geometry,
             )
-            origin_x, origin_y = _transform_point(
-                np.asarray(geometry.origin, dtype=np.float64),
-                source_size=image.size,
-                target_size=rotated.size,
-                angle_degrees=geometry.rotation_degrees,
-            )
-            crop_box = (
-                0,
-                0,
-                min(rotated.width, round(origin_x + crop_width)),
-                min(rotated.height, round(origin_y + crop_height)),
-            )
-            rotated.crop(crop_box).save(output_path, format=source_format, **jpeg_save_kwargs)
             return _RulerCropResult(
                 detected=True,
                 healthy=geometry.healthy,
                 centered=False,
             )
+
+        if not allow_ruler_fallback:
+            return _RulerCropResult(detected=False, healthy=False, centered=False)
 
         ruler_origin = _find_ruler_origin(image)
         if ruler_origin is None:
@@ -234,6 +253,49 @@ def _crop_image(source: Path, output_path: Path, crop_size_cm: int) -> _RulerCro
             centered = False
         image.crop(crop_box).save(output_path, format=source_format, **jpeg_save_kwargs)
         return _RulerCropResult(detected=False, healthy=False, centered=centered)
+
+
+def _save_ruler_crop(
+    source: Path,
+    output_path: Path,
+    crop_size_cm: int,
+    geometry: RulerGeometry,
+) -> _RulerCropResult:
+    with Image.open(source) as opened:
+        source_format = opened.format or source.suffix.lstrip(".").upper()
+        jpeg_save_kwargs = {}
+        if source_format.upper() in {"JPEG", "JPG"}:
+            quantization = getattr(opened, "quantization", None)
+            if quantization:
+                jpeg_save_kwargs = {
+                    "qtables": quantization,
+                    "subsampling": JpegImagePlugin.get_sampling(opened),
+                }
+        image = ImageOps.exif_transpose(opened)
+        dpi_x, dpi_y = _image_dpi(image)
+        crop_width = min(_cm_to_pixels(crop_size_cm, dpi_x), image.width)
+        crop_height = min(_cm_to_pixels(crop_size_cm, dpi_y), image.height)
+        rotated = image.rotate(
+            geometry.rotation_degrees,
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+            fillcolor=(255, 255, 255),
+        )
+        origin_x, origin_y = _transform_point(
+            np.asarray(geometry.origin, dtype=np.float64),
+            source_size=image.size,
+            target_size=rotated.size,
+            angle_degrees=geometry.rotation_degrees,
+        )
+        crop_box = (
+            0,
+            0,
+            min(rotated.width, round(origin_x + crop_width)),
+            min(rotated.height, round(origin_y + crop_height)),
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        rotated.crop(crop_box).save(output_path, format=source_format, **jpeg_save_kwargs)
+    return _RulerCropResult(detected=True, healthy=geometry.healthy, centered=False)
 
 
 def _transform_point(

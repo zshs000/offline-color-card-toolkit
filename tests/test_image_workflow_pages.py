@@ -14,6 +14,8 @@ import color_card_toolkit.ui.scan_rename_page as scan_rename_module
 from color_card_toolkit.core.image_rename import ImageProcessResult
 from color_card_toolkit.core.models import ImageRecognitionResult
 from color_card_toolkit.core.recognition_settings import RecognitionSettings
+from color_card_toolkit.core.ruler_detection import RulerGeometry
+from color_card_toolkit.core.ruler_inspection import RulerInspection
 from color_card_toolkit.ui.main_window import MainWindow
 from color_card_toolkit.ui.main_image_crop_page import MainImageCropPage
 from color_card_toolkit.ui.scan_rename_page import ScanRenamePage
@@ -95,6 +97,7 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     _app()
     page = MainImageCropPage(on_back=lambda: None)
     source = tmp_path / "main.jpg"
+    source.write_bytes(b"source")
     output = tmp_path / "cropped" / "Main01.jpg"
     page.output_folder_edit.setText(str(output.parent))
     page.size_combo.setCurrentIndex(1)
@@ -108,18 +111,28 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     )
     captured: dict[str, object] = {}
 
-    def fake_crop(image_paths, output_dir, ocr_engine, *, crop_size_cm, name_recognizer):
-        captured["crop_size_cm"] = crop_size_cm
-        captured["ocr_engine"] = ocr_engine
-        captured["recognized_name"] = name_recognizer(image_paths[0])
-        return [ImageProcessResult(image_paths[0], output, "Main01")]
+    page.preview_checkbox.setChecked(False)
+    geometry = RulerGeometry(
+        origin=(100, 100), rotation_degrees=0, spacing_x=10, spacing_y=10,
+        span_mm=150, top_support=151, left_support=151,
+        top_inlier_ratio=1, left_inlier_ratio=1,
+    )
+    inspection = RulerInspection(source, "passed", "ok", geometry, (800, 800))
 
     monkeypatch.setattr(
         main_crop_module,
         "recognize_main_image_name_result_with_cloud",
         lambda path, config: _cloud_name_result(path, "Main01"),
     )
-    monkeypatch.setattr(main_crop_module, "crop_main_images", fake_crop)
+    monkeypatch.setattr(main_crop_module, "inspect_image_ruler", lambda *args, **kwargs: inspection)
+    monkeypatch.setattr(
+        main_crop_module,
+        "crop_image_from_geometry",
+        lambda source_path, output_path, crop_size_cm, geometry: (
+            captured.update(crop_size_cm=crop_size_cm),
+            Path(output_path).write_bytes(b"cropped"),
+        )[-1],
+    )
     monkeypatch.setattr(
         main_crop_module,
         "run_batch_task",
@@ -139,8 +152,7 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     assert page.pick_images_button.isEnabled()
     assert page.settings_button.isEnabled()
     assert captured["max_workers"] == 2
-    assert captured["ocr_engine"] is None
-    assert captured["recognized_name"] == "Main01"
+    assert page._recognition_settings.main_image_ruler_search_ratio == 0.20
 
 
 def test_main_image_crop_retries_only_failed_names_three_times(monkeypatch, tmp_path: Path) -> None:
@@ -169,20 +181,24 @@ def test_main_image_crop_retries_only_failed_names_three_times(monkeypatch, tmp_
             raise RuntimeError("The write operation timed out")
         return _cloud_name_result(path, f"云端-{path.stem}", prompt_tokens=100, completion_tokens=10)
 
-    def fake_crop(image_paths, output_dir, ocr_engine, *, crop_size_cm, name_recognizer):
-        source = image_paths[0]
-        warnings = []
-        try:
-            name = name_recognizer(source)
-        except Exception as exc:
-            name = source.stem
-            warnings = [f"云端名称识别失败：{exc}", "名称识别为空，已使用原文件名"]
-        output = Path(output_dir) / f"{name}.jpg"
-        output.write_bytes(b"cropped")
-        return [ImageProcessResult(source, output, name, warnings)]
+    geometry = RulerGeometry(
+        origin=(100, 100), rotation_degrees=0, spacing_x=10, spacing_y=10,
+        span_mm=100, top_support=101, left_support=101,
+        top_inlier_ratio=1, left_inlier_ratio=1,
+    )
+    monkeypatch.setattr(
+        main_crop_module,
+        "inspect_image_ruler",
+        lambda path, **kwargs: RulerInspection(path, "passed", "ok", geometry, (800, 800)),
+    )
+    monkeypatch.setattr(
+        main_crop_module,
+        "crop_image_from_geometry",
+        lambda source_path, output_path, crop_size_cm, geometry: Path(output_path).write_bytes(b"cropped"),
+    )
+    page.preview_checkbox.setChecked(False)
 
     monkeypatch.setattr(main_crop_module, "recognize_main_image_name_result_with_cloud", fake_recognize)
-    monkeypatch.setattr(main_crop_module, "crop_main_images", fake_crop)
     monkeypatch.setattr(
         main_crop_module,
         "run_batch_task",
@@ -200,9 +216,9 @@ def test_main_image_crop_retries_only_failed_names_three_times(monkeypatch, tmp_
 
     assert calls == {"recover.jpg": 2, "never.jpg": 4, "first-ok.jpg": 1}
     assert (output_dir / "云端-recover.jpg").exists()
-    assert (output_dir / "never.jpg").exists()
+    assert not (output_dir / "never.jpg").exists()
     assert (output_dir / "云端-first-ok.jpg").exists()
-    assert "自动重试 3 次后仍有 1 张名称识别失败" in shown["message"]
+    assert "云端名称识别失败" in shown["message"]
     assert "never.jpg" in shown["message"]
     assert "输入 Token：200" in shown["message"]
     assert "输出 Token：20" in shown["message"]

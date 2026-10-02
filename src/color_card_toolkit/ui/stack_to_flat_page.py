@@ -305,6 +305,7 @@ class StackToFlatPage(QWidget):
                 model=model_edit.text().strip(),
                 horizontal_use_yolo=horizontal_yolo_checkbox.isChecked(),
                 cloud_concurrency=concurrency_spinbox.value(),
+                main_image_ruler_search_ratio=self._recognition_settings.main_image_ruler_search_ratio,
             )
             try:
                 save_recognition_settings(self._recognition_settings)

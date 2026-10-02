@@ -341,3 +341,21 @@ def test_crop_main_images_warns_when_ruler_detection_unhealthy(tmp_path: Path) -
 
     assert results[0].output_path.exists()
     assert any("标尺刻度检测可靠性偏低" in warning for warning in results[0].warnings)
+
+
+def test_crop_main_images_can_require_a_reliable_ruler(tmp_path: Path) -> None:
+    image_path = tmp_path / "without-ruler.png"
+    Image.new("RGB", (1600, 1400), "blue").save(image_path, dpi=(254, 254))
+    output_dir = tmp_path / "cropped"
+
+    results = crop_main_images(
+        [image_path],
+        output_dir,
+        None,
+        crop_size_cm=10,
+        name_recognizer=lambda path: "NO-RULER",
+        allow_ruler_fallback=False,
+    )
+
+    assert results == []
+    assert not list(output_dir.glob("*"))

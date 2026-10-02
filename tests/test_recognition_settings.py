@@ -38,3 +38,14 @@ def test_recognition_settings_default_horizontal_yolo_is_disabled(tmp_path, monk
 
     assert loaded.horizontal_use_yolo is False
     assert loaded.cloud_concurrency == 4
+    assert loaded.main_image_ruler_search_ratio == 0.20
+
+
+def test_main_image_ruler_search_ratio_is_persisted_and_clamped(tmp_path) -> None:
+    settings_path = tmp_path / "settings.json"
+    save_recognition_settings(
+        RecognitionSettings(main_image_ruler_search_ratio=0.9),
+        settings_path,
+    )
+    loaded = load_recognition_settings(settings_path)
+    assert loaded.main_image_ruler_search_ratio == 0.50
