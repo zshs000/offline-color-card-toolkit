@@ -28,6 +28,10 @@ def default_settings_path() -> Path:
     return base / APP_FOLDER_NAME / SETTINGS_FILENAME
 
 
+def default_logs_dir() -> Path:
+    return default_settings_path().parent / "logs"
+
+
 def load_recognition_settings(path: Path | None = None) -> RecognitionSettings:
     settings_path = path or default_settings_path()
     settings = RecognitionSettings(

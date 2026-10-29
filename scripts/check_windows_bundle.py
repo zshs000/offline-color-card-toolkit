@@ -15,6 +15,7 @@ def main() -> None:
     parser.add_argument("--pyz", type=Path)
     parser.add_argument("--max-mib", type=float, default=400)
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--main-image", type=Path, help="用一张现有扫描图验证打包后的标尺裁剪")
     args = parser.parse_args()
     bundle = args.bundle.resolve()
     executable = bundle / "线下色卡采集工具集.exe"
@@ -49,11 +50,16 @@ def main() -> None:
         project_file = Path(__file__).resolve().parents[1] / "pyproject.toml"
         if (bundle / "_internal/pyproject.toml").read_bytes() != project_file.read_bytes():
             raise SystemExit("Bundled version configuration differs from pyproject.toml")
-        for mode in ("template", "ocr", "main-marker"):
+        modes = ["template", "ocr", "ui", "main-marker"]
+        smoke_env = os.environ.copy()
+        if args.main_image:
+            modes.append("main-ruler")
+            smoke_env["COLOR_CARD_TOOLKIT_SMOKE_IMAGE"] = str(args.main_image.resolve())
+        for mode in modes:
             subprocess.run(
                 [str(executable)],
                 cwd=bundle,
-                env={**os.environ, "COLOR_CARD_TOOLKIT_SMOKE": mode},
+                env={**smoke_env, "COLOR_CARD_TOOLKIT_SMOKE": mode},
                 stdin=subprocess.DEVNULL,
                 check=True,
                 timeout=60,

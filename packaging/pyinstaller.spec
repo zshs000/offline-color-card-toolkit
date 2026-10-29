@@ -23,9 +23,30 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["ultralytics", "torch", "torchvision", "polars", "_polars_runtime_32", "networkx"],
+    excludes=["ultralytics", "torch", "torchvision", "polars", "_polars_runtime_32", "networkx",
+              "PIL.AvifImagePlugin", "PIL._avif"],
     noarchive=False,
 )
+
+# 本工具只处理静态JPEG/PNG，界面使用Widgets。去掉自动收集的视频、
+# PDF和虚拟键盘依赖；保留OCR、数值库、软件OpenGL回退及中文/英文资源。
+unused_qt = {
+    "qt6quick.dll", "qt6qml.dll", "qt6opengl.dll", "qt6qmlmodels.dll",
+    "qt6virtualkeyboard.dll", "qt6qmlmeta.dll", "qt6qmlworkerscript.dll",
+    "qtvirtualkeyboardplugin.dll", "qt6pdf.dll", "qpdf.dll",
+}
+
+def keep_runtime_file(entry):
+    name = entry[0].replace("\\", "/").lower()
+    basename = name.rsplit("/", 1)[-1]
+    if basename in unused_qt or basename.startswith("opencv_videoio_ffmpeg"):
+        return False
+    if "/translations/" in name and name.endswith(".qm"):
+        return name.endswith(("_zh_cn.qm", "_zh_tw.qm", "_en.qm", "_en_us.qm", "_en_gb.qm"))
+    return True
+
+a.binaries = [entry for entry in a.binaries if keep_runtime_file(entry)]
+a.datas = [entry for entry in a.datas if keep_runtime_file(entry)]
 pyz = PYZ(a.pure)
 
 exe = EXE(

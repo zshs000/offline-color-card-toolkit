@@ -43,6 +43,7 @@ from color_card_toolkit.core.recognition_logging import (
 )
 from color_card_toolkit.core.recognition_settings import (
     RecognitionSettings,
+    default_logs_dir,
     load_recognition_settings,
     save_recognition_settings,
 )
@@ -331,7 +332,7 @@ class MainImageCropPage(QWidget):
 
     def _write_health_report(self, items: list[_HealthWorkItem]) -> Path | None:
         try:
-            output_dir = Path.cwd() / "logs"
+            output_dir = default_logs_dir()
             output_dir.mkdir(parents=True, exist_ok=True)
             path = output_dir / f"ruler_health_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             rows = []

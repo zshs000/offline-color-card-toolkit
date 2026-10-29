@@ -53,6 +53,20 @@ jobs:
       - name: Check size, dependencies and startup
         if: matrix.python-version == '3.11'
         run: python scripts/check_windows_bundle.py --pyz build/pyinstaller/PYZ-00.pyz --smoke
+      - name: Build Chinese installer
+        if: matrix.python-version == '3.11'
+        run: |
+          choco install nsis --no-progress -y
+          python scripts/build_installer.py --compiler "${env:ProgramFiles(x86)}/NSIS/makensis.exe"
+      - name: Upload Windows installer
+        if: matrix.python-version == '3.11' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-${{ github.sha }}
+          path: installers/OfflineColorCardToolkit-Setup-*-x64.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
       - name: Upload tested Windows application
         if: matrix.python-version == '3.11' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4

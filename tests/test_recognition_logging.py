@@ -9,6 +9,24 @@ from color_card_toolkit.core.models import ImageRecognitionResult
 from color_card_toolkit.core.recognition_logging import write_recognition_log
 
 
+def test_default_logs_keep_existing_user_settings_outside_program_directory(tmp_path, monkeypatch):
+    from color_card_toolkit.core.recognition_settings import default_settings_path
+
+    program = tmp_path / "program"
+    program.mkdir()
+    monkeypatch.chdir(program)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "user-data"))
+    settings = default_settings_path()
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"model":"saved-model"}', encoding="utf-8")
+    before = settings.read_bytes()
+    now = datetime(2026, 10, 29, 16, 0)
+    output = write_recognition_log([], failed_count=0, cloud_config=None, started_at=now, finished_at=now)
+    assert output.parent == settings.parent / "logs"
+    assert settings.read_bytes() == before
+    assert list(program.iterdir()) == []
+
+
 def test_write_recognition_log_summarizes_usage_and_redacts_api_key(tmp_path: Path) -> None:
     result = ImageRecognitionResult(
         image_path=tmp_path / "931.jpg",

@@ -7,6 +7,7 @@ from typing import Any
 
 from color_card_toolkit.core.cloud_recognition import CloudVisionConfig
 from color_card_toolkit.core.models import ImageRecognitionResult
+from color_card_toolkit.core.recognition_settings import default_logs_dir
 
 
 def summarize_api_usage(results: list[ImageRecognitionResult]) -> dict[str, Any]:
@@ -37,7 +38,7 @@ def write_recognition_log(
     finished_at: datetime,
     logs_dir: Path | None = None,
 ) -> Path:
-    output_dir = logs_dir or Path.cwd() / "logs"
+    output_dir = logs_dir or default_logs_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = output_dir / f"recognition_{finished_at.strftime('%Y%m%d_%H%M%S')}.json"
     wall_seconds = (finished_at - started_at).total_seconds()
