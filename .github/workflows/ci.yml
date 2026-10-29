@@ -49,7 +49,7 @@ jobs:
           retention-days: 7
       - name: Build Windows application
         if: matrix.python-version == '3.11'
-        run: python -m PyInstaller --noconfirm packaging/pyinstaller.spec
+        run: python scripts/build_windows.py
       - name: Check size, dependencies and startup
         if: matrix.python-version == '3.11'
         run: python scripts/check_windows_bundle.py --pyz build/pyinstaller/PYZ-00.pyz --smoke

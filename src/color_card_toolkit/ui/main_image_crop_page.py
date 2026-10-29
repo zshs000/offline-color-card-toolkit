@@ -110,7 +110,7 @@ class MainImageCropPage(QWidget):
         self._preview_confirmed = False
         self._active_cloud_config: CloudVisionConfig | None = None
         self._crop_output_folder: Path | None = None
-        self._crop_size_cm = 10
+        self._crop_width_cm, self._crop_height_cm = 10, 10
         self._crop_failures: list[str] = []
         self._health_failed_count = 0
         self._cloud_failed_count = 0
@@ -143,8 +143,8 @@ class MainImageCropPage(QWidget):
         settings_box = QGroupBox("截图设置")
         settings_layout = QGridLayout(settings_box)
         self.size_combo = QComboBox()
-        self.size_combo.addItem("10cm * 10cm", 10)
-        self.size_combo.addItem("15cm * 15cm", 15)
+        for width, height in ((10, 10), (15, 15), (5, 5), (5, 10), (10, 5)):
+            self.size_combo.addItem(f"{width} × {height} cm", (width, height))
         self.output_folder_edit = QLineEdit(str(self._default_output_folder()))
         self.browse_output_button = QPushButton("选择地址")
         self.browse_output_button.clicked.connect(self._pick_output_folder)
@@ -221,7 +221,7 @@ class MainImageCropPage(QWidget):
         self._crop_output_folder = (
             Path(output_folder_text) if output_folder_text else self._default_output_folder()
         )
-        self._crop_size_cm = int(self.size_combo.currentData())
+        self._crop_width_cm, self._crop_height_cm = self.size_combo.currentData()
         self._active_cloud_config = cloud_config
         self._health_items = []
         self._cloud_items = []
@@ -238,12 +238,13 @@ class MainImageCropPage(QWidget):
 
     def _start_health_check(self) -> None:
         ratio = self._recognition_settings.main_image_ruler_search_ratio
-        crop_size_cm = self._crop_size_cm
+        crop_width_cm, crop_height_cm = self._crop_width_cm, self._crop_height_cm
 
         def process(path: Path) -> _HealthWorkItem:
             inspection = inspect_image_ruler(
                 path,
-                crop_size_cm=crop_size_cm,
+                crop_width_cm=crop_width_cm,
+                crop_height_cm=crop_height_cm,
                 search_ratio=ratio,
                 suggest_retry=True,
             )
@@ -366,7 +367,8 @@ class MainImageCropPage(QWidget):
             payload = {
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "search_ratio": self._recognition_settings.main_image_ruler_search_ratio,
-                "crop_size_cm": self._crop_size_cm,
+                "crop_width_cm": self._crop_width_cm,
+                "crop_height_cm": self._crop_height_cm,
                 "items": rows,
             }
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -495,7 +497,9 @@ class MainImageCropPage(QWidget):
             geometry = item.inspection.geometry
             if geometry is None:
                 raise RuntimeError("健康检测结果缺少标尺几何信息")
-            crop_image_from_geometry(item.source_path, output, self._crop_size_cm, geometry)
+            crop_image_from_geometry(
+                item.source_path, output, self._crop_width_cm, self._crop_height_cm, geometry
+            )
             return _PreviewEntry(
                 item_id=item_id,
                 source_path=item.source_path,
@@ -549,7 +553,7 @@ class MainImageCropPage(QWidget):
             for item in self._preview_entries
         ]
         self._preview_server = MainImagePreviewServer(
-            payload, parent=self, crop_size_cm=self._crop_size_cm
+            payload, parent=self, crop_width_cm=self._crop_width_cm, crop_height_cm=self._crop_height_cm
         )
         self._preview_server.confirmed.connect(self._save_preview_entries)
         QMessageBox.information(

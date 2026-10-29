@@ -23,11 +23,12 @@ class MainImagePreviewServer(QObject):
         items: list[dict[str, Any]],
         parent: QObject | None = None,
         *,
-        crop_size_cm: int,
+        crop_width_cm: int,
+        crop_height_cm: int,
     ) -> None:
         super().__init__(parent)
         self._items = items
-        self._crop_size_cm = crop_size_cm
+        self._crop_width_cm, self._crop_height_cm = crop_width_cm, crop_height_cm
         self._item_by_id = {str(item["id"]): item for item in items}
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._make_handler())
         self._thread = threading.Thread(
@@ -123,7 +124,7 @@ class MainImagePreviewServer(QObject):
         return Handler
 
     def _render_html(self) -> str:
-        size = html.escape(f"{self._crop_size_cm} × {self._crop_size_cm} cm")
+        size = html.escape(f"{self._crop_width_cm} × {self._crop_height_cm} cm")
         cards = []
         for item in self._items:
             item_id = html.escape(str(item["id"]), quote=True)

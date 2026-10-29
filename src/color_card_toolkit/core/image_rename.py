@@ -11,6 +11,7 @@ from typing import Callable
 import numpy as np
 from PIL import Image, ImageOps, JpegImagePlugin
 
+from color_card_toolkit.core.main_image_marker import marker_exif
 from color_card_toolkit.core.models import OcrBlock
 from color_card_toolkit.core.ocr_engine import OcrEngine
 from color_card_toolkit.core.ruler_detection import RulerGeometry, detect_ruler
@@ -110,7 +111,8 @@ def crop_main_images(
     output_dir: str | Path,
     ocr_engine: OcrEngine | None,
     *,
-    crop_size_cm: int,
+    crop_width_cm: int,
+    crop_height_cm: int,
     name_recognizer: Callable[[Path], str] | None = None,
     ruler_search_ratio: float | None = None,
     allow_ruler_fallback: bool = True,
@@ -142,7 +144,8 @@ def crop_main_images(
             crop_result = _crop_image(
                 source,
                 output_path,
-                crop_size_cm,
+                crop_width_cm,
+                crop_height_cm,
                 ruler_search_ratio=ruler_search_ratio,
                 allow_ruler_fallback=allow_ruler_fallback,
             )
@@ -184,17 +187,19 @@ def rename_processed_image(result: ImageProcessResult, recognized_name: str) -> 
 def crop_image_from_geometry(
     source: str | Path,
     output_path: str | Path,
-    crop_size_cm: int,
+    crop_width_cm: int,
+    crop_height_cm: int,
     geometry: RulerGeometry,
 ) -> _RulerCropResult:
     """Crop using a previously health-checked ruler geometry."""
-    return _save_ruler_crop(Path(source), Path(output_path), crop_size_cm, geometry)
+    return _save_ruler_crop(Path(source), Path(output_path), crop_width_cm, crop_height_cm, geometry)
 
 
 def _crop_image(
     source: Path,
     output_path: Path,
-    crop_size_cm: int,
+    crop_width_cm: int,
+    crop_height_cm: int,
     *,
     ruler_search_ratio: float | None = None,
     allow_ruler_fallback: bool = True,
@@ -211,20 +216,21 @@ def _crop_image(
                 }
         image = ImageOps.exif_transpose(image)
         dpi_x, dpi_y = _image_dpi(image)
-        crop_width = min(_cm_to_pixels(crop_size_cm, dpi_x), image.width)
-        crop_height = min(_cm_to_pixels(crop_size_cm, dpi_y), image.height)
+        crop_width = min(_cm_to_pixels(crop_width_cm, dpi_x), image.width)
+        crop_height = min(_cm_to_pixels(crop_height_cm, dpi_y), image.height)
 
         geometry = detect_ruler(
             image,
             (dpi_x, dpi_y),
-            span_mm=crop_size_cm * 10,
+            span_mm=max(crop_width_cm, crop_height_cm) * 10,
             coarse_search_ratio=ruler_search_ratio,
         )
         if geometry is not None:
             _save_ruler_crop(
                 source,
                 output_path,
-                crop_size_cm,
+                crop_width_cm,
+                crop_height_cm,
                 geometry,
             )
             return _RulerCropResult(
@@ -258,7 +264,8 @@ def _crop_image(
 def _save_ruler_crop(
     source: Path,
     output_path: Path,
-    crop_size_cm: int,
+    crop_width_cm: int,
+    crop_height_cm: int,
     geometry: RulerGeometry,
 ) -> _RulerCropResult:
     with Image.open(source) as opened:
@@ -273,8 +280,8 @@ def _save_ruler_crop(
                 }
         image = ImageOps.exif_transpose(opened)
         dpi_x, dpi_y = _image_dpi(image)
-        crop_width = min(_cm_to_pixels(crop_size_cm, dpi_x), image.width)
-        crop_height = min(_cm_to_pixels(crop_size_cm, dpi_y), image.height)
+        crop_width = min(_cm_to_pixels(crop_width_cm, dpi_x), image.width)
+        crop_height = min(_cm_to_pixels(crop_height_cm, dpi_y), image.height)
         rotated = image.rotate(
             geometry.rotation_degrees,
             resample=Image.Resampling.BICUBIC,
@@ -294,7 +301,11 @@ def _save_ruler_crop(
             min(rotated.height, round(origin_y + crop_height)),
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        rotated.crop(crop_box).save(output_path, format=source_format, **jpeg_save_kwargs)
+        exif = marker_exif(crop_width_cm, crop_height_cm, round(origin_x), round(origin_y))
+        # 作者于2026-10-28确认上游扫描流程固定、通常输出JPEG。
+        # PNG分支仅覆盖PNG主图输入，预计很少使用；上游流程变化后再调整判断。
+        # EXIF随裁剪图一次保存，写标记不再额外压缩JPEG。
+        rotated.crop(crop_box).save(output_path, format=source_format, exif=exif, **jpeg_save_kwargs)
     return _RulerCropResult(detected=True, healthy=geometry.healthy, centered=False)
 
 

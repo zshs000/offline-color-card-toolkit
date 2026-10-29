@@ -25,7 +25,8 @@ class RulerInspection:
 def inspect_image_ruler(
     image_path: str | Path,
     *,
-    crop_size_cm: int,
+    crop_width_cm: int,
+    crop_height_cm: int,
     search_ratio: float,
     suggest_retry: bool = True,
 ) -> RulerInspection:
@@ -38,7 +39,7 @@ def inspect_image_ruler(
             geometry = detect_ruler(
                 image,
                 dpi,
-                span_mm=crop_size_cm * 10,
+                span_mm=max(crop_width_cm, crop_height_cm) * 10,
                 coarse_search_ratio=search_ratio,
             )
     except Exception as exc:
@@ -67,7 +68,8 @@ def inspect_image_ruler(
         suggested_ratio = _suggest_ratio(
             image,
             dpi,
-            crop_size_cm=crop_size_cm,
+            crop_width_cm=crop_width_cm,
+            crop_height_cm=crop_height_cm,
             current_ratio=search_ratio,
         )
 
@@ -97,7 +99,8 @@ def _suggest_ratio(
     image: Image.Image,
     dpi: tuple[int, int],
     *,
-    crop_size_cm: int,
+    crop_width_cm: int,
+    crop_height_cm: int,
     current_ratio: float,
 ) -> float | None:
     candidates = [0.25, 0.30, 0.35, 0.40, 0.50]
@@ -107,7 +110,7 @@ def _suggest_ratio(
         geometry = detect_ruler(
             image,
             dpi,
-            span_mm=crop_size_cm * 10,
+            span_mm=max(crop_width_cm, crop_height_cm) * 10,
             coarse_search_ratio=candidate,
         )
         if geometry is not None and geometry.healthy:

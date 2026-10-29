@@ -18,7 +18,7 @@ a = Analysis(
     [str(ROOT / "src/color_card_toolkit/main.py")],
     pathex=[str(ROOT / "src")],
     binaries=[],
-    datas=template_datas + model_datas + rapidocr_datas,
+    datas=template_datas + model_datas + rapidocr_datas + [(str(ROOT / "pyproject.toml"), ".")],
     hiddenimports=["rapidocr_onnxruntime"],
     hookspath=[],
     hooksconfig={},

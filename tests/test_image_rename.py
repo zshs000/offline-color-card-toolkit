@@ -144,7 +144,7 @@ def test_crop_main_images_uses_image_dpi_to_crop_requested_centimeters(tmp_path:
     output_dir = tmp_path / "cropped"
     engine = FakeOcrEngine({str(image_path): [block("Main01", 100, 120)]})
 
-    results = crop_main_images([image_path], output_dir, engine, crop_size_cm=10)
+    results = crop_main_images([image_path], output_dir, engine, crop_width_cm=10, crop_height_cm=10)
 
     assert results[0].output_path == output_dir / "Main01.jpg"
     with Image.open(results[0].output_path) as cropped:
@@ -168,7 +168,7 @@ def test_crop_main_images_preserves_source_jpeg_compression(tmp_path: Path) -> N
         [image_path],
         tmp_path / "cropped",
         FakeOcrEngine({str(image_path): [block("Main01", 100, 120)]}),
-        crop_size_cm=10,
+        crop_width_cm=10, crop_height_cm=10,
     )
 
     with Image.open(results[0].output_path) as cropped:
@@ -190,7 +190,7 @@ def test_crop_main_images_crops_from_image_center_not_ocr_text_position(tmp_path
     output_dir = tmp_path / "cropped"
     engine = FakeOcrEngine({str(image_path): [block("Main01", 100, 120)]})
 
-    results = crop_main_images([image_path], output_dir, engine, crop_size_cm=10)
+    results = crop_main_images([image_path], output_dir, engine, crop_width_cm=10, crop_height_cm=10)
 
     with Image.open(results[0].output_path) as cropped:
         assert cropped.size == (1000, 1000)
@@ -211,7 +211,7 @@ def test_crop_main_images_keeps_top_and_left_rulers_when_detected(tmp_path: Path
         [image_path],
         output_dir,
         None,
-        crop_size_cm=10,
+        crop_width_cm=10, crop_height_cm=10,
         name_recognizer=lambda path: "P420",
     )
 
@@ -245,7 +245,7 @@ def test_crop_main_images_uses_tick_ruler_origin_when_detected(tmp_path: Path) -
         [image_path],
         output_dir,
         None,
-        crop_size_cm=10,
+        crop_width_cm=10, crop_height_cm=10,
         name_recognizer=lambda path: "RULER01",
     )
 
@@ -316,7 +316,7 @@ def test_crop_main_images_rotates_tilted_ruler_using_detected_geometry(tmp_path:
         [image_path],
         output_dir,
         None,
-        crop_size_cm=10,
+        crop_width_cm=10, crop_height_cm=10,
         name_recognizer=lambda path: "TILT01",
     )
 
@@ -335,7 +335,7 @@ def test_crop_main_images_warns_when_ruler_detection_unhealthy(tmp_path: Path) -
         [image_path],
         output_dir,
         None,
-        crop_size_cm=10,
+        crop_width_cm=10, crop_height_cm=10,
         name_recognizer=lambda path: "SHORT01",
     )
 
@@ -352,7 +352,7 @@ def test_crop_main_images_can_require_a_reliable_ruler(tmp_path: Path) -> None:
         [image_path],
         output_dir,
         None,
-        crop_size_cm=10,
+        crop_width_cm=10, crop_height_cm=10,
         name_recognizer=lambda path: "NO-RULER",
         allow_ruler_fallback=False,
     )

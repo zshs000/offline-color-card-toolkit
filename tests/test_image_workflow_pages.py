@@ -90,7 +90,8 @@ def test_main_image_crop_page_defaults_to_crop_output_folder_and_10cm() -> None:
     page = MainImageCropPage(on_back=lambda: None)
 
     assert Path(page.output_folder_edit.text()).name == "主图截图及名称更改输出"
-    assert page.size_combo.currentData() == 10
+    assert page.size_combo.currentData() == (10, 10)
+    assert [page.size_combo.itemData(i) for i in range(page.size_combo.count())] == [(10, 10), (15, 15), (5, 5), (5, 10), (10, 5)]
 
 
 def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monkeypatch, tmp_path: Path) -> None:
@@ -129,8 +130,8 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
     monkeypatch.setattr(
         main_crop_module,
         "crop_image_from_geometry",
-        lambda source_path, output_path, crop_size_cm, geometry: (
-            captured.update(crop_size_cm=crop_size_cm),
+        lambda source_path, output_path, crop_width_cm, crop_height_cm, geometry: (
+            captured.update(crop_width_cm=crop_width_cm, crop_height_cm=crop_height_cm),
             Path(output_path).write_bytes(b"cropped"),
         )[-1],
     )
@@ -143,7 +144,7 @@ def test_main_image_crop_page_passes_selected_size_and_clears_after_success(monk
 
     page._confirm_crop()
 
-    assert captured["crop_size_cm"] == 15
+    assert (captured["crop_width_cm"], captured["crop_height_cm"]) == (15, 15)
     assert page._image_paths == []
     assert page.image_summary.text() == "未选择图片"
     assert page.output_folder_edit.text() == str(output.parent)
@@ -199,7 +200,7 @@ def test_main_image_crop_retries_only_failed_names_three_times(monkeypatch, tmp_
     monkeypatch.setattr(
         main_crop_module,
         "crop_image_from_geometry",
-        lambda source_path, output_path, crop_size_cm, geometry: Path(output_path).write_bytes(b"cropped"),
+        lambda source_path, output_path, crop_width_cm, crop_height_cm, geometry: Path(output_path).write_bytes(b"cropped"),
     )
     page.preview_checkbox.setChecked(False)
 

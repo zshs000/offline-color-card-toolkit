@@ -46,7 +46,10 @@ def main() -> None:
     if args.smoke:
         if os.name != "nt":
             raise SystemExit("Windows executable smoke checks require Windows")
-        for mode in ("template", "ocr"):
+        project_file = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        if (bundle / "_internal/pyproject.toml").read_bytes() != project_file.read_bytes():
+            raise SystemExit("Bundled version configuration differs from pyproject.toml")
+        for mode in ("template", "ocr", "main-marker"):
             subprocess.run(
                 [str(executable)],
                 cwd=bundle,

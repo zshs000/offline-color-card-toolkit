@@ -21,7 +21,7 @@ from color_card_toolkit.ui.main_image_preview import MainImagePreviewServer
 
 def test_confirmation_response_precedes_desktop_signal_and_shutdown(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
-    server = MainImagePreviewServer([{"id": "1"}], crop_size_cm=10)
+    server = MainImagePreviewServer([{"id": "1"}], crop_width_cm=10, crop_height_cm=10)
     monkeypatch.setattr("color_card_toolkit.ui.main_image_preview.webbrowser.open", lambda *args, **kwargs: True)
     events = []
     finished = threading.Event()
@@ -57,7 +57,7 @@ def test_confirmation_response_precedes_desktop_signal_and_shutdown(monkeypatch)
 
 def test_invalid_confirmation_does_not_trigger_desktop_save(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
-    server = MainImagePreviewServer([], crop_size_cm=10)
+    server = MainImagePreviewServer([], crop_width_cm=10, crop_height_cm=10)
     monkeypatch.setattr("color_card_toolkit.ui.main_image_preview.webbrowser.open", lambda *args, **kwargs: True)
     confirmed = []
     server.confirmed.connect(confirmed.append, Qt.DirectConnection)
@@ -78,7 +78,7 @@ def test_preview_submission_handles_close_restrictions_and_failures() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is needed to execute the browser submission script")
-    server = MainImagePreviewServer([], crop_size_cm=10)
+    server = MainImagePreviewServer([], crop_width_cm=10, crop_height_cm=10)
     try:
         page = server._render_html()
     finally:
@@ -104,7 +104,7 @@ def test_main_image_preview_renders_size_and_original_comparison() -> None:
                 "recognized_name": "识别名称",
             }
         ],
-        crop_size_cm=15,
+        crop_width_cm=10, crop_height_cm=5,
     )
     try:
         page = server._render_html()
@@ -112,7 +112,7 @@ def test_main_image_preview_renders_size_and_original_comparison() -> None:
         server.close()
         app.processEvents()
 
-    assert "裁剪尺寸：15 × 15 cm" in page
+    assert "裁剪尺寸：10 × 5 cm" in page
     assert "完整原图 · 核对名称标签" in page
     assert "/original/1" in page
     assert "点击查看原图与裁剪图" in page
